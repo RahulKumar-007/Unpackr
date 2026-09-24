@@ -71,6 +71,7 @@ fn test_physical_disk_space_reclamation() {
         state_dir: None,
         verbose: true,
         quiet: false,
+        ..Default::default()
     };
 
     let summary = ExtractionEngine::extract(&archive_path, &options).expect("Extraction with reclamation failed");
@@ -143,6 +144,7 @@ fn test_default_mode_does_not_modify_read_only_archive() {
         state_dir: None,
         verbose: false,
         quiet: false,
+        ..Default::default()
     };
 
     let summary = ExtractionEngine::extract(&archive_path, &options).expect("Read-only extraction failed");
@@ -183,6 +185,7 @@ fn test_sub_block_entries_reclaim_safely_without_holes() {
         state_dir: None,
         verbose: false,
         quiet: false,
+        ..Default::default()
     };
 
     let summary = ExtractionEngine::extract(&archive_path, &options).unwrap();

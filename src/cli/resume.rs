@@ -12,6 +12,9 @@ pub fn run_resume(
     verify_existing: bool,
     collision: Option<String>,
     reclaim_archive: bool,
+    max_total_size: Option<u64>,
+    max_file_size: Option<u64>,
+    max_entries: Option<usize>,
     json: bool,
     verbose: bool,
     quiet: bool,
@@ -31,6 +34,9 @@ pub fn run_resume(
         reclaim_archive,
         verbose,
         quiet: quiet || json,
+        max_total_size,
+        max_file_size,
+        max_entries,
     };
 
     let summary = ExtractionEngine::resume(target, &options)?;

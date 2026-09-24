@@ -69,6 +69,18 @@ pub enum Commands {
         #[arg(long)]
         reclaim_archive: bool,
 
+        /// Maximum allowed total uncompressed bytes across all entries (DoS defense)
+        #[arg(long)]
+        max_total_size: Option<u64>,
+
+        /// Maximum allowed uncompressed bytes for any single entry (DoS defense)
+        #[arg(long)]
+        max_file_size: Option<u64>,
+
+        /// Maximum allowed entry count in archive (DoS defense)
+        #[arg(long)]
+        max_entries: Option<usize>,
+
         /// Custom state directory for crash recovery journals
         #[arg(long)]
         state_dir: Option<PathBuf>,
@@ -105,6 +117,18 @@ pub enum Commands {
         /// Reclaim archive storage in-place during resume
         #[arg(long)]
         reclaim_archive: bool,
+
+        /// Maximum allowed total uncompressed bytes across all entries (DoS defense)
+        #[arg(long)]
+        max_total_size: Option<u64>,
+
+        /// Maximum allowed uncompressed bytes for any single entry (DoS defense)
+        #[arg(long)]
+        max_file_size: Option<u64>,
+
+        /// Maximum allowed entry count in archive (DoS defense)
+        #[arg(long)]
+        max_entries: Option<usize>,
 
         /// Output resume summary in JSON format
         #[arg(long)]

@@ -23,6 +23,7 @@ fn test_manifest_creation_and_state_lifecycle() {
         state_dir: None,
         verbose: false,
         quiet: false,
+        ..Default::default()
     };
 
     let summary = ExtractionEngine::extract(archive_path, &options).expect("Extraction failed");
@@ -65,6 +66,7 @@ fn test_verification_detects_disk_corruption() {
         state_dir: None,
         verbose: false,
         quiet: false,
+        ..Default::default()
     };
 
     ExtractionEngine::extract(archive_path, &options).unwrap();
@@ -114,6 +116,7 @@ fn test_archive_identity_tampering_detection() {
         state_dir: None,
         verbose: false,
         quiet: false,
+        ..Default::default()
     };
 
     ExtractionEngine::extract(zip_file.path(), &options).unwrap();
@@ -149,6 +152,7 @@ fn test_job_id_generation_and_lookup() {
         state_dir: None,
         verbose: false,
         quiet: false,
+        ..Default::default()
     };
 
     let summary = ExtractionEngine::extract(archive_path, &options).unwrap();

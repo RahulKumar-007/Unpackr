@@ -24,6 +24,7 @@ pub struct ZipArchiveInspection {
     pub central_directory_offset: u64,
     pub central_directory_size: u64,
     pub is_zip64: bool,
+    pub has_overlapping_entries: bool,
     pub entries: Vec<ZipEntryMetadata>,
 }
 
@@ -57,11 +58,32 @@ impl ZipInspector {
             total_entries,
         )?;
 
-        // 4. Inspect Local File Headers to find exact data offsets
+        // 4. Inspect Local File Headers to find exact data offsets and validate boundaries
         for entry in &mut entries {
+            if entry.local_header_offset >= cd_offset {
+                bail!(
+                    "Corrupt archive: entry '{}' local header offset ({}) is at or past central directory offset ({})",
+                    entry.name,
+                    entry.local_header_offset,
+                    cd_offset
+                );
+            }
+
             let data_offset = Self::resolve_data_offset(&mut file, entry.local_header_offset)?;
             entry.data_offset = data_offset;
+
+            if entry.data_end_offset() > cd_offset {
+                bail!(
+                    "Corrupt archive: entry '{}' compressed data range ends at {}, exceeding central directory offset ({})",
+                    entry.name,
+                    entry.data_end_offset(),
+                    cd_offset
+                );
+            }
         }
+
+        // 5. Detect overlapping payload ranges (e.g. Fifield non-linear zip bomb)
+        let has_overlapping_entries = Self::detect_overlapping_entries(&entries);
 
         let total_uncompressed_size = entries.iter().map(|e| e.uncompressed_size).sum();
         let total_compressed_size = entries.iter().map(|e| e.compressed_size).sum();
@@ -76,8 +98,35 @@ impl ZipInspector {
             central_directory_offset: cd_offset,
             central_directory_size: cd_size,
             is_zip64,
+            has_overlapping_entries,
             entries,
         })
+    }
+
+    /// Detects if any distinct entries in the archive share overlapping compressed data intervals.
+    /// Overlapping intervals indicate non-standard archives or Fifield-style zip bombs.
+    pub fn detect_overlapping_entries(entries: &[ZipEntryMetadata]) -> bool {
+        let mut intervals: Vec<(u64, u64)> = entries
+            .iter()
+            .filter(|e| e.compressed_size > 0)
+            .map(|e| (e.data_offset, e.data_end_offset()))
+            .collect();
+
+        if intervals.len() <= 1 {
+            return false;
+        }
+
+        intervals.sort_unstable_by_key(|&(start, _)| start);
+
+        for i in 0..intervals.len() - 1 {
+            let (_, end_prev) = intervals[i];
+            let (start_curr, _) = intervals[i + 1];
+            if start_curr < end_prev {
+                return true;
+            }
+        }
+
+        false
     }
 }
 

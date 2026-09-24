@@ -19,6 +19,7 @@ fn test_streaming_extraction_accuracy() {
         state_dir: None,
         verbose: true,
         quiet: false,
+        ..Default::default()
     };
 
     let summary = ExtractionEngine::extract(archive_path, &options).expect("Extraction failed");
@@ -81,6 +82,7 @@ fn test_sparse_hole_extraction() {
         state_dir: None,
         verbose: false,
         quiet: false,
+        ..Default::default()
     };
 
     let summary = ExtractionEngine::extract(zip_file.path(), &options).unwrap();
@@ -111,6 +113,7 @@ fn test_zip_slip_rejection_at_extraction() {
         state_dir: None,
         verbose: false,
         quiet: false,
+        ..Default::default()
     };
 
     let res = ExtractionEngine::extract(archive_path, &options);
@@ -149,6 +152,7 @@ fn test_compression_bomb_rejection() {
         state_dir: None,
         verbose: false,
         quiet: false,
+        ..Default::default()
     };
 
     let res = ExtractionEngine::extract(zip_file.path(), &options);
@@ -185,6 +189,7 @@ fn test_collision_policies_at_engine_level() {
         state_dir: None,
         verbose: false,
         quiet: false,
+        ..Default::default()
     };
     assert!(ExtractionEngine::extract(zip_file.path(), &options).is_err());
 

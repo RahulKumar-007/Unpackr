@@ -17,6 +17,9 @@ fn main() -> Result<()> {
             no_sparse,
             max_ratio,
             reclaim_archive,
+            max_total_size,
+            max_file_size,
+            max_entries,
             state_dir,
             json,
         } => {
@@ -30,6 +33,9 @@ fn main() -> Result<()> {
                 state_dir,
                 verbose: cli.verbose,
                 quiet: cli.quiet || json,
+                max_total_size,
+                max_file_size,
+                max_entries,
             };
 
             let summary = unpackr::extraction::ExtractionEngine::extract(&archive, &options)?;
@@ -68,6 +74,9 @@ fn main() -> Result<()> {
             verify,
             collision,
             reclaim_archive,
+            max_total_size,
+            max_file_size,
+            max_entries,
             json,
         } => {
             unpackr::cli::resume::run_resume(
@@ -78,6 +87,9 @@ fn main() -> Result<()> {
                 verify,
                 collision,
                 reclaim_archive,
+                max_total_size,
+                max_file_size,
+                max_entries,
                 json,
                 cli.verbose,
                 cli.quiet,

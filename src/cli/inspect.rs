@@ -39,6 +39,7 @@ pub fn run_inspect(archive_path: &Path, json: bool, limit: Option<usize>) -> Res
     println!("Central Dir Offset:   0x{:08X} ({})", inspection.central_directory_offset, inspection.central_directory_offset);
     println!("Central Dir Size:     {}", format_bytes(inspection.central_directory_size));
     println!("Zip64 Extended:       {}", if inspection.is_zip64 { "Yes" } else { "No" });
+    println!("Overlapping Streams:  {}", if inspection.has_overlapping_entries { "WARNING: Yes (in-place reclamation forbidden)" } else { "No (safe for reclamation)" });
     println!("--------------------------------------------------------------------------------");
     println!(
         "{:<5} {:<32} {:<10} {:<12} {:<12} {:<8} {:<10} {:<10}",

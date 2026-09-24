@@ -8,7 +8,10 @@ use crate::archive::{CompressionMethod, ZipEntryMetadata};
 use crate::extraction::collision::CollisionPolicy;
 use crate::extraction::error::ExtractionError;
 use crate::extraction::sparse_writer::SparseWriter;
-use crate::security::path::{resolve_safe_dest, sanitize_entry_path};
+use crate::security::{
+    apply_safe_permissions, check_forbidden_device_type, check_symlink_traversal, resolve_safe_dest,
+    sanitize_entry_path,
+};
 
 #[derive(Debug)]
 pub enum WorkerResult {
@@ -33,7 +36,15 @@ impl EntryWorker {
         enable_sparse: bool,
         max_compression_ratio: f64,
     ) -> Result<WorkerResult, ExtractionError> {
-        // 1. Path sanitization (Zip Slip defense)
+        // 0. Forbidden special device files (block, character, FIFO, socket)
+        if let Err(reason) = check_forbidden_device_type(entry.external_attributes) {
+            return Err(ExtractionError::ForbiddenDeviceType {
+                entry: entry.name.clone(),
+                reason,
+            });
+        }
+
+        // 1. Path sanitization (Zip Slip defense, Windows devices, .unpackr protection)
         let sanitized = sanitize_entry_path(&entry.name).map_err(|e| {
             ExtractionError::Security {
                 entry: entry.name.clone(),
@@ -48,12 +59,21 @@ impl EntryWorker {
             }
         })?;
 
-        // 2. Handle directory entries
+        // 2. Symlink traversal & poisoning defense on filesystem
+        check_symlink_traversal(dest_root, &sanitized).map_err(|e| {
+            ExtractionError::Security {
+                entry: entry.name.clone(),
+                source: e,
+            }
+        })?;
+
+        // 3. Handle directory entries
         if entry.is_dir {
             fs::create_dir_all(&target_path).map_err(|e| ExtractionError::Io {
                 entry: entry.name.clone(),
                 source: e,
             })?;
+            let _ = apply_safe_permissions(&target_path, entry.external_attributes, true);
             return Ok(WorkerResult::Directory { path: target_path });
         }
 
@@ -123,6 +143,9 @@ impl EntryWorker {
 
         match extraction_res {
             Ok((bytes_written, sparse_saved)) => {
+                // Apply safe sanitized permissions before atomic rename
+                let _ = apply_safe_permissions(&temp_path, entry.external_attributes, false);
+
                 // 8. Atomic Rename on verified output
                 fs::rename(&temp_path, &resolved_target).map_err(|e| {
                     let _ = fs::remove_file(&temp_path);

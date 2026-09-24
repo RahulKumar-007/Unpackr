@@ -23,6 +23,12 @@ pub struct ExtractionOptions {
     pub state_dir: Option<PathBuf>,
     pub verbose: bool,
     pub quiet: bool,
+    #[serde(default)]
+    pub max_total_size: Option<u64>,
+    #[serde(default)]
+    pub max_file_size: Option<u64>,
+    #[serde(default)]
+    pub max_entries: Option<usize>,
 }
 
 impl Default for ExtractionOptions {
@@ -36,6 +42,9 @@ impl Default for ExtractionOptions {
             state_dir: None,
             verbose: false,
             quiet: false,
+            max_total_size: None,
+            max_file_size: None,
+            max_entries: None,
         }
     }
 }
@@ -52,6 +61,12 @@ pub struct ResumeOptions {
     pub reclaim_archive: bool,
     pub verbose: bool,
     pub quiet: bool,
+    #[serde(default)]
+    pub max_total_size: Option<u64>,
+    #[serde(default)]
+    pub max_file_size: Option<u64>,
+    #[serde(default)]
+    pub max_entries: Option<usize>,
 }
 
 impl Default for ResumeOptions {
@@ -67,6 +82,9 @@ impl Default for ResumeOptions {
             reclaim_archive: false,
             verbose: false,
             quiet: false,
+            max_total_size: None,
+            max_file_size: None,
+            max_entries: None,
         }
     }
 }
@@ -103,6 +121,32 @@ impl ExtractionEngine {
         let inspection = ZipInspector::inspect(archive_path).map_err(|e| {
             ExtractionError::Archive(format!("Failed to inspect archive: {}", e))
         })?;
+
+        // Security check: Overlapping compressed data streams (e.g. Fifield non-linear zip bomb)
+        if options.reclaim_archive && inspection.has_overlapping_entries {
+            return Err(ExtractionError::Archive(
+                "Archive contains overlapping compressed data streams (e.g. Fifield non-linear zip bomb). In-place reclamation cannot be safely performed on overlapping entries.".to_string(),
+            ));
+        }
+
+        // Security check: Resource limits
+        if let Some(max_entries) = options.max_entries {
+            if inspection.total_entries > max_entries {
+                return Err(ExtractionError::ResourceLimitExceeded(format!(
+                    "Archive contains {} entries, exceeding configured limit of {}",
+                    inspection.total_entries, max_entries
+                )));
+            }
+        }
+
+        if let Some(max_total) = options.max_total_size {
+            if inspection.total_uncompressed_size > max_total {
+                return Err(ExtractionError::ResourceLimitExceeded(format!(
+                    "Total uncompressed archive size is {} bytes, exceeding configured limit of {} bytes",
+                    inspection.total_uncompressed_size, max_total
+                )));
+            }
+        }
 
         // 2. Open archive for streaming and optional in-place reclamation
         let (mut archive_file, mut puncher) = if options.reclaim_archive {
@@ -227,6 +271,16 @@ impl ExtractionEngine {
                     inspection.entries.len(),
                     entry.name
                 );
+            }
+
+            // Security check: Single file resource limit
+            if let Some(max_file) = options.max_file_size {
+                if entry.uncompressed_size > max_file {
+                    return Err(ExtractionError::ResourceLimitExceeded(format!(
+                        "Entry '{}' uncompressed size is {} bytes, exceeding configured limit of {} bytes",
+                        entry.name, entry.uncompressed_size, max_file
+                    )));
+                }
             }
 
             // Transition: PENDING -> EXTRACTING
@@ -430,6 +484,32 @@ impl ExtractionEngine {
             ExtractionError::Archive(format!("Failed to inspect archive: {}", e))
         })?;
 
+        // Security check: Overlapping compressed data streams (e.g. Fifield non-linear zip bomb)
+        if options.reclaim_archive && inspection.has_overlapping_entries {
+            return Err(ExtractionError::Archive(
+                "Archive contains overlapping compressed data streams (e.g. Fifield non-linear zip bomb). In-place reclamation cannot be safely performed on overlapping entries.".to_string(),
+            ));
+        }
+
+        // Security check: Resource limits
+        if let Some(max_entries) = options.max_entries {
+            if inspection.total_entries > max_entries {
+                return Err(ExtractionError::ResourceLimitExceeded(format!(
+                    "Archive contains {} entries, exceeding configured limit of {}",
+                    inspection.total_entries, max_entries
+                )));
+            }
+        }
+
+        if let Some(max_total) = options.max_total_size {
+            if inspection.total_uncompressed_size > max_total {
+                return Err(ExtractionError::ResourceLimitExceeded(format!(
+                    "Total uncompressed archive size is {} bytes, exceeding configured limit of {} bytes",
+                    inspection.total_uncompressed_size, max_total
+                )));
+            }
+        }
+
         // 8. Open archive for streaming decompression and optional in-place reclamation
         let (mut archive_file, mut puncher) = if options.reclaim_archive {
             let file = std::fs::OpenOptions::new()
@@ -528,6 +608,16 @@ impl ExtractionEngine {
                     inspection.entries.len(),
                     entry.name
                 );
+            }
+
+            // Security check: Single file resource limit
+            if let Some(max_file) = options.max_file_size {
+                if entry.uncompressed_size > max_file {
+                    return Err(ExtractionError::ResourceLimitExceeded(format!(
+                        "Entry '{}' uncompressed size is {} bytes, exceeding configured limit of {} bytes",
+                        entry.name, entry.uncompressed_size, max_file
+                    )));
+                }
             }
 
             // Transition: PENDING -> EXTRACTING

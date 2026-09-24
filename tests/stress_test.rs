@@ -75,6 +75,7 @@ fn test_thousand_entries_deep_hierarchy_stress() {
         state_dir: None,
         verbose: false,
         quiet: false,
+        ..Default::default()
     };
 
     let summary = ExtractionEngine::extract(&archive_path, &options)
@@ -198,6 +199,7 @@ fn test_mixed_compression_and_sparsity_stress() {
         state_dir: None,
         verbose: false,
         quiet: false,
+        ..Default::default()
     };
 
     let summary = ExtractionEngine::extract(&archive_path, &options)
@@ -322,6 +324,7 @@ fn test_repeated_rolling_crash_recovery_stress() {
         reclaim_archive: true,
         verbose: false,
         quiet: false,
+        ..Default::default()
     };
 
     let resume_summary = ExtractionEngine::resume(job_id.as_str(), &resume_opts)
@@ -373,6 +376,7 @@ fn test_memory_bounded_streaming_stress() {
         state_dir: None,
         verbose: false,
         quiet: false,
+        ..Default::default()
     };
 
     let summary = ExtractionEngine::extract(&archive_path, &options)

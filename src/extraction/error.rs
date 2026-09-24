@@ -47,6 +47,15 @@ pub enum ExtractionError {
         source: std::io::Error,
     },
 
+    #[error("Security violation for entry '{entry}': {reason}")]
+    ForbiddenDeviceType {
+        entry: String,
+        reason: &'static str,
+    },
+
+    #[error("Resource limit exceeded: {0}")]
+    ResourceLimitExceeded(String),
+
     #[error("Archive error: {0}")]
     Archive(String),
 }

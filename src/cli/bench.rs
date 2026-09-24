@@ -102,6 +102,7 @@ pub fn run_bench(
         state_dir: None,
         verbose,
         quiet: json,
+        ..Default::default()
     };
     let summary_std = ExtractionEngine::extract(&archive_std, &opts_std)?;
 
@@ -117,6 +118,7 @@ pub fn run_bench(
         state_dir: None,
         verbose,
         quiet: json,
+        ..Default::default()
     };
     let summary_rec = ExtractionEngine::extract(&archive_rec, &opts_rec)?;
 
