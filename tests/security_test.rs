@@ -26,8 +26,10 @@ fn test_symlink_traversal_poisoning_attack() {
     {
         let file = File::create(&archive_path).unwrap();
         let mut zip = ZipWriter::new(file);
-        zip.start_file("evil_dir/target.txt", SimpleFileOptions::default()).unwrap();
-        zip.write_all(b"malicious payload intended to escape dest").unwrap();
+        zip.start_file("evil_dir/target.txt", SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(b"malicious payload intended to escape dest")
+            .unwrap();
         zip.finish().unwrap();
     }
 
@@ -40,16 +42,28 @@ fn test_symlink_traversal_poisoning_attack() {
         };
 
         let result = ExtractionEngine::extract(&archive_path, &options);
-        assert!(result.is_err(), "Expected symlink traversal attack to be rejected");
+        assert!(
+            result.is_err(),
+            "Expected symlink traversal attack to be rejected"
+        );
         let err = result.unwrap_err();
         assert!(
-            matches!(err, ExtractionError::Security { source: PathSecurityError::SymlinkTraversal(_), .. }),
+            matches!(
+                err,
+                ExtractionError::Security {
+                    source: PathSecurityError::SymlinkTraversal(_),
+                    ..
+                }
+            ),
             "Expected SymlinkTraversal error, got: {:?}",
             err
         );
 
         // Assert nothing was written to outside_dir
-        assert!(!outside_dir.join("target.txt").exists(), "File escaped into outside directory!");
+        assert!(
+            !outside_dir.join("target.txt").exists(),
+            "File escaped into outside directory!"
+        );
     }
 }
 
@@ -62,7 +76,8 @@ fn test_reserved_unpackr_path_attack() {
     {
         let file = File::create(&archive_path).unwrap();
         let mut zip = ZipWriter::new(file);
-        zip.start_file(".unpackr/manifest.json", SimpleFileOptions::default()).unwrap();
+        zip.start_file(".unpackr/manifest.json", SimpleFileOptions::default())
+            .unwrap();
         zip.write_all(b"forged manifest content").unwrap();
         zip.finish().unwrap();
     }
@@ -76,7 +91,13 @@ fn test_reserved_unpackr_path_attack() {
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
-        matches!(err, ExtractionError::Security { source: PathSecurityError::ReservedPath(_), .. }),
+        matches!(
+            err,
+            ExtractionError::Security {
+                source: PathSecurityError::ReservedPath(_),
+                ..
+            }
+        ),
         "Expected ReservedPath error, got: {:?}",
         err
     );
@@ -91,7 +112,8 @@ fn test_windows_reserved_device_names() {
     {
         let file = File::create(&archive_path).unwrap();
         let mut zip = ZipWriter::new(file);
-        zip.start_file("CON.txt", SimpleFileOptions::default()).unwrap();
+        zip.start_file("CON.txt", SimpleFileOptions::default())
+            .unwrap();
         zip.write_all(b"con device data").unwrap();
         zip.finish().unwrap();
     }
@@ -105,7 +127,13 @@ fn test_windows_reserved_device_names() {
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
-        matches!(err, ExtractionError::Security { source: PathSecurityError::ReservedDeviceName(_), .. }),
+        matches!(
+            err,
+            ExtractionError::Security {
+                source: PathSecurityError::ReservedDeviceName(_),
+                ..
+            }
+        ),
         "Expected ReservedDeviceName error, got: {:?}",
         err
     );
@@ -120,7 +148,8 @@ fn test_alternate_data_stream_colon_attack() {
     {
         let file = File::create(&archive_path).unwrap();
         let mut zip = ZipWriter::new(file);
-        zip.start_file("file.txt:hidden", SimpleFileOptions::default()).unwrap();
+        zip.start_file("file.txt:hidden", SimpleFileOptions::default())
+            .unwrap();
         zip.write_all(b"hidden stream payload").unwrap();
         zip.finish().unwrap();
     }
@@ -134,7 +163,13 @@ fn test_alternate_data_stream_colon_attack() {
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
-        matches!(err, ExtractionError::Security { source: PathSecurityError::InvalidCharacters(_), .. }),
+        matches!(
+            err,
+            ExtractionError::Security {
+                source: PathSecurityError::InvalidCharacters(_),
+                ..
+            }
+        ),
         "Expected InvalidCharacters for colon, got: {:?}",
         err
     );
@@ -154,15 +189,15 @@ fn test_fifield_overlapping_entries_reclaim_rejection() {
         let lh_offset = 0u64;
         let mut lh = vec![
             0x50, 0x4B, 0x03, 0x04, // Local header signature
-            20, 0,                   // Version needed (2.0)
-            0, 0,                    // Flags
-            0, 0,                    // Stored (no compression)
-            0, 0, 0, 0,              // Time/Date
-            0x12, 0x34, 0x56, 0x78,  // CRC-32 (dummy)
-            10, 0, 0, 0,             // Compressed size (10)
-            10, 0, 0, 0,             // Uncompressed size (10)
-            6, 0,                    // Name length (6)
-            0, 0,                    // Extra field length (0)
+            20, 0, // Version needed (2.0)
+            0, 0, // Flags
+            0, 0, // Stored (no compression)
+            0, 0, 0, 0, // Time/Date
+            0x12, 0x34, 0x56, 0x78, // CRC-32 (dummy)
+            10, 0, 0, 0, // Compressed size (10)
+            10, 0, 0, 0, // Uncompressed size (10)
+            6, 0, // Name length (6)
+            0, 0, // Extra field length (0)
         ];
         lh.extend_from_slice(b"f1.dat");
         lh.extend_from_slice(b"0123456789"); // 10 bytes data
@@ -173,21 +208,48 @@ fn test_fifield_overlapping_entries_reclaim_rejection() {
 
         for name in &[b"f1.dat", b"f2.dat"] {
             let mut cd = vec![
-                0x50, 0x4B, 0x01, 0x02, // Central directory signature
-                20, 0,                   // Version made by
-                20, 0,                   // Version needed
-                0, 0,                    // Flags
-                0, 0,                    // Stored
-                0, 0, 0, 0,              // Time/Date
-                0x12, 0x34, 0x56, 0x78,  // CRC-32
-                10, 0, 0, 0,             // Compressed size
-                10, 0, 0, 0,             // Uncompressed size
-                name.len() as u8, 0,     // Name length
-                0, 0,                    // Extra length
-                0, 0,                    // Comment length
-                0, 0,                    // Disk number
-                0, 0,                    // Internal attrs
-                0, 0, 0, 0,              // External attrs
+                0x50,
+                0x4B,
+                0x01,
+                0x02, // Central directory signature
+                20,
+                0, // Version made by
+                20,
+                0, // Version needed
+                0,
+                0, // Flags
+                0,
+                0, // Stored
+                0,
+                0,
+                0,
+                0, // Time/Date
+                0x12,
+                0x34,
+                0x56,
+                0x78, // CRC-32
+                10,
+                0,
+                0,
+                0, // Compressed size
+                10,
+                0,
+                0,
+                0, // Uncompressed size
+                name.len() as u8,
+                0, // Name length
+                0,
+                0, // Extra length
+                0,
+                0, // Comment length
+                0,
+                0, // Disk number
+                0,
+                0, // Internal attrs
+                0,
+                0,
+                0,
+                0, // External attrs
             ];
             cd.extend_from_slice(&(lh_offset as u32).to_le_bytes()); // Local header offset!
             cd.extend_from_slice(*name);
@@ -200,10 +262,10 @@ fn test_fifield_overlapping_entries_reclaim_rejection() {
         // EOCD
         let mut eocd = vec![
             0x50, 0x4B, 0x05, 0x06, // EOCD signature
-            0, 0,                    // Disk number
-            0, 0,                    // CD disk
-            2, 0,                    // Total entries on disk
-            2, 0,                    // Total entries in CD
+            0, 0, // Disk number
+            0, 0, // CD disk
+            2, 0, // Total entries on disk
+            2, 0, // Total entries in CD
         ];
         eocd.extend_from_slice(&(cd_size as u32).to_le_bytes());
         eocd.extend_from_slice(&(cd_offset as u32).to_le_bytes());
@@ -213,7 +275,10 @@ fn test_fifield_overlapping_entries_reclaim_rejection() {
 
     // Inspect archive
     let inspection = ZipInspector::inspect(&archive_path).expect("Inspection failed");
-    assert!(inspection.has_overlapping_entries, "Inspection must detect overlapping entries");
+    assert!(
+        inspection.has_overlapping_entries,
+        "Inspection must detect overlapping entries"
+    );
 
     // Attempt extraction with reclaim_archive: true
     let options = ExtractionOptions {
@@ -223,9 +288,14 @@ fn test_fifield_overlapping_entries_reclaim_rejection() {
     };
 
     let result = ExtractionEngine::extract(&archive_path, &options);
-    assert!(result.is_err(), "Reclamation must be rejected on overlapping entries!");
+    assert!(
+        result.is_err(),
+        "Reclamation must be rejected on overlapping entries!"
+    );
     let err_msg = result.unwrap_err().to_string();
-    assert!(err_msg.contains("overlapping compressed data streams") || err_msg.contains("zip bomb"));
+    assert!(
+        err_msg.contains("overlapping compressed data streams") || err_msg.contains("zip bomb")
+    );
 }
 
 #[test]
@@ -240,15 +310,15 @@ fn test_special_device_file_rejection() {
         let lh_offset = 0u64;
         let mut lh = vec![
             0x50, 0x4B, 0x03, 0x04, // Local header signature
-            20, 0,                   // Version needed (2.0)
-            0, 0,                    // Flags
-            0, 0,                    // Stored
-            0, 0, 0, 0,              // Time/Date
-            0x12, 0x34, 0x56, 0x78,  // CRC-32
-            4, 0, 0, 0,              // Compressed size
-            4, 0, 0, 0,              // Uncompressed size
-            10, 0,                   // Name length (10)
-            0, 0,                    // Extra length
+            20, 0, // Version needed (2.0)
+            0, 0, // Flags
+            0, 0, // Stored
+            0, 0, 0, 0, // Time/Date
+            0x12, 0x34, 0x56, 0x78, // CRC-32
+            4, 0, 0, 0, // Compressed size
+            4, 0, 0, 0, // Uncompressed size
+            10, 0, // Name length (10)
+            0, 0, // Extra length
         ];
         lh.extend_from_slice(b"named_pipe");
         lh.extend_from_slice(b"fifo");
@@ -257,19 +327,19 @@ fn test_special_device_file_rejection() {
         let cd_offset = file.metadata().unwrap().len();
         let mut cd = vec![
             0x50, 0x4B, 0x01, 0x02, // Central directory signature
-            0x03, 0x1E,              // Version made by: Unix (3) + version 30
-            20, 0,                   // Version needed
-            0, 0,                    // Flags
-            0, 0,                    // Stored
-            0, 0, 0, 0,              // Time/Date
-            0x12, 0x34, 0x56, 0x78,  // CRC-32
-            4, 0, 0, 0,              // Compressed size
-            4, 0, 0, 0,              // Uncompressed size
-            10, 0,                   // Name length
-            0, 0,                    // Extra length
-            0, 0,                    // Comment length
-            0, 0,                    // Disk number
-            0, 0,                    // Internal attrs
+            0x03, 0x1E, // Version made by: Unix (3) + version 30
+            20, 0, // Version needed
+            0, 0, // Flags
+            0, 0, // Stored
+            0, 0, 0, 0, // Time/Date
+            0x12, 0x34, 0x56, 0x78, // CRC-32
+            4, 0, 0, 0, // Compressed size
+            4, 0, 0, 0, // Uncompressed size
+            10, 0, // Name length
+            0, 0, // Extra length
+            0, 0, // Comment length
+            0, 0, // Disk number
+            0, 0, // Internal attrs
         ];
         // External attrs: S_IFIFO (0o010000 | 0o666) << 16
         cd.extend_from_slice(&(0o010666u32 << 16).to_le_bytes());
@@ -280,13 +350,7 @@ fn test_special_device_file_rejection() {
         let cd_end = file.metadata().unwrap().len();
         let cd_size = cd_end - cd_offset;
 
-        let mut eocd = vec![
-            0x50, 0x4B, 0x05, 0x06,
-            0, 0,
-            0, 0,
-            1, 0,
-            1, 0,
-        ];
+        let mut eocd = vec![0x50, 0x4B, 0x05, 0x06, 0, 0, 0, 0, 1, 0, 1, 0];
         eocd.extend_from_slice(&(cd_size as u32).to_le_bytes());
         eocd.extend_from_slice(&(cd_offset as u32).to_le_bytes());
         eocd.extend_from_slice(&[0, 0]);
@@ -338,6 +402,7 @@ fn test_suid_sgid_and_world_writable_bit_stripping() {
         let mode = meta.permissions().mode();
         assert_eq!(mode & 0o4000, 0, "SUID bit must be stripped!");
         assert_eq!(mode & 0o2000, 0, "SGID bit must be stripped!");
+        assert_eq!(mode & 0o0020, 0, "Group-writable bit must be stripped!");
         assert_eq!(mode & 0o0002, 0, "World-writable bit must be stripped!");
     }
 }
@@ -352,7 +417,8 @@ fn test_resource_limits_max_entries() {
         let file = File::create(&archive_path).unwrap();
         let mut zip = ZipWriter::new(file);
         for i in 0..10 {
-            zip.start_file(format!("file_{}.txt", i), SimpleFileOptions::default()).unwrap();
+            zip.start_file(format!("file_{}.txt", i), SimpleFileOptions::default())
+                .unwrap();
             zip.write_all(b"abc").unwrap();
         }
         zip.finish().unwrap();
@@ -383,7 +449,8 @@ fn test_resource_limits_max_total_size() {
     {
         let file = File::create(&archive_path).unwrap();
         let mut zip = ZipWriter::new(file);
-        zip.start_file("big.dat", SimpleFileOptions::default()).unwrap();
+        zip.start_file("big.dat", SimpleFileOptions::default())
+            .unwrap();
         zip.write_all(&vec![0x42; 2 * 1024 * 1024]).unwrap(); // 2 MB
         zip.finish().unwrap();
     }
@@ -413,9 +480,11 @@ fn test_resource_limits_max_file_size() {
     {
         let file = File::create(&archive_path).unwrap();
         let mut zip = ZipWriter::new(file);
-        zip.start_file("allowed.txt", SimpleFileOptions::default()).unwrap();
+        zip.start_file("allowed.txt", SimpleFileOptions::default())
+            .unwrap();
         zip.write_all(b"small").unwrap();
-        zip.start_file("exceeds.dat", SimpleFileOptions::default()).unwrap();
+        zip.start_file("exceeds.dat", SimpleFileOptions::default())
+            .unwrap();
         zip.write_all(&vec![0xAA; 3 * 1024 * 1024]).unwrap(); // 3 MB
         zip.finish().unwrap();
     }

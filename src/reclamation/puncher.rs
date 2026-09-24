@@ -1,15 +1,15 @@
-use std::fs::File;
 use crate::archive::ZipEntryMetadata;
 use crate::reclamation::error::ReclamationError;
+use std::fs::File;
 
 pub const DEFAULT_BLOCK_SIZE: u64 = 4096;
 
 /// Calculates the safe, inward-aligned block range for hole punching.
-/// 
+///
 /// Given an entry's compressed data interval [D_start, D_end), the range is rounded:
 /// R_start = ceil(D_start / block_size) * block_size
 /// R_end   = floor(D_end / block_size) * block_size
-/// 
+///
 /// If R_end > R_start, returns Some((R_start, R_end - R_start)).
 /// Otherwise returns None (no whole blocks to punch).
 pub fn compute_inward_reclaim_range(
@@ -117,10 +117,12 @@ impl ArchiveHolePuncher {
 
             if ret != 0 {
                 let err = std::io::Error::last_os_error();
-                if err.raw_os_error() == Some(libc::EOPNOTSUPP) {
-                    return Err(ReclamationError::UnsupportedFilesystem);
+                match err.raw_os_error() {
+                    Some(libc::EOPNOTSUPP) | Some(libc::EINVAL) => {
+                        return Err(ReclamationError::UnsupportedFilesystem);
+                    }
+                    _ => return Err(ReclamationError::Io(err)),
                 }
-                return Err(ReclamationError::Io(err));
             }
         }
 
@@ -158,10 +160,7 @@ mod tests {
             compute_inward_reclaim_range(4096, 4096, 4096),
             Some((4096, 4096))
         );
-        assert_eq!(
-            compute_inward_reclaim_range(0, 8192, 4096),
-            Some((0, 8192))
-        );
+        assert_eq!(compute_inward_reclaim_range(0, 8192, 4096), Some((0, 8192)));
 
         // Case 3: Inward alignment from unaligned edges
         // Data range: [100, 9000).

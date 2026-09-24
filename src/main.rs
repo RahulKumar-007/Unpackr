@@ -1,11 +1,15 @@
-use std::io::IsTerminal;
 use anyhow::Result;
 use clap::Parser;
+use std::io::IsTerminal;
 use unpackr::cli::{Cli, Commands};
 
 fn run(cli: Cli) -> Result<()> {
     match cli.command {
-        Commands::Inspect { archive, json, limit } => {
+        Commands::Inspect {
+            archive,
+            json,
+            limit,
+        } => {
             let limit_opt = if limit == 0 { None } else { Some(limit) };
             unpackr::cli::inspect::run_inspect(&archive, json, limit_opt)?;
         }
@@ -22,7 +26,7 @@ fn run(cli: Cli) -> Result<()> {
             state_dir,
             json,
         } => {
-            let collision_policy = unpackr::extraction::CollisionPolicy::from_str_lossy(&collision);
+            let collision_policy = collision;
             let options = unpackr::extraction::ExtractionOptions {
                 destination: destination.clone(),
                 collision_policy,
@@ -34,7 +38,7 @@ fn run(cli: Cli) -> Result<()> {
                 quiet: cli.quiet || json,
                 max_total_size,
                 max_file_size,
-                max_entries,
+                max_entries: max_entries.or(Some(unpackr::extraction::DEFAULT_MAX_ENTRIES)),
             };
 
             let summary = unpackr::extraction::ExtractionEngine::extract(&archive, &options)?;
@@ -52,15 +56,30 @@ fn run(cli: Cli) -> Result<()> {
                 println!("Extracted Files:      {}", summary.extracted_files);
                 println!("Created Directories:  {}", summary.created_directories);
                 println!("Skipped Files:        {}", summary.skipped_files);
-                println!("Data Written:         {}", unpackr::cli::inspect::format_bytes(summary.total_uncompressed_bytes));
+                println!(
+                    "Data Written:         {}",
+                    unpackr::cli::inspect::format_bytes(summary.total_uncompressed_bytes)
+                );
                 if summary.sparse_bytes_saved > 0 {
-                    println!("Sparse Space Saved:   {}", unpackr::cli::inspect::format_bytes(summary.sparse_bytes_saved));
+                    println!(
+                        "Sparse Space Saved:   {}",
+                        unpackr::cli::inspect::format_bytes(summary.sparse_bytes_saved)
+                    );
                 }
                 if summary.reclaimed_archive_bytes > 0 {
-                    println!("Archive Reclaimed:    {}", unpackr::cli::inspect::format_bytes(summary.reclaimed_archive_bytes));
+                    println!(
+                        "Archive Reclaimed:    {}",
+                        unpackr::cli::inspect::format_bytes(summary.reclaimed_archive_bytes)
+                    );
                 }
-                println!("Peak Disk Footprint:  {}", unpackr::cli::inspect::format_bytes(summary.peak_disk_footprint_bytes));
-                println!("Throughput:           {:.1} MB/s", summary.throughput_mb_per_sec);
+                println!(
+                    "Peak Disk Footprint:  {}",
+                    unpackr::cli::inspect::format_bytes(summary.peak_disk_footprint_bytes)
+                );
+                println!(
+                    "Throughput:           {:.1} MB/s",
+                    summary.throughput_mb_per_sec
+                );
                 println!("Duration:             {:.2?}", summary.duration);
                 println!("================================================================================");
             }
@@ -124,9 +143,19 @@ fn run(cli: Cli) -> Result<()> {
 }
 
 fn main() {
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+
     let cli = Cli::parse();
 
     if let Err(err) = run(cli) {
+        if let Some(io_err) = err.downcast_ref::<std::io::Error>() {
+            if io_err.kind() == std::io::ErrorKind::BrokenPipe {
+                std::process::exit(0);
+            }
+        }
         if std::io::stderr().is_terminal() {
             eprintln!("\x1b[1;31merror:\x1b[0m {}", err);
             let mut source = err.source();

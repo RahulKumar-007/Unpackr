@@ -1,14 +1,25 @@
-use std::fs::{self, File};
-use std::io::Write;
-use std::path::{Path, PathBuf};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use tempfile::tempdir;
-use zip::write::SimpleFileOptions;
-use zip::ZipWriter;
+use std::path::PathBuf;
 
+#[cfg(feature = "bench")]
 use crate::cli::inspect::format_bytes;
+#[cfg(feature = "bench")]
 use crate::extraction::{CollisionPolicy, ExtractionEngine, ExtractionOptions};
+#[cfg(feature = "bench")]
+use anyhow::Context;
+#[cfg(feature = "bench")]
+use std::fs::{self, File};
+#[cfg(feature = "bench")]
+use std::io::Write;
+#[cfg(feature = "bench")]
+use std::path::Path;
+#[cfg(feature = "bench")]
+use tempfile::tempdir;
+#[cfg(feature = "bench")]
+use zip::write::SimpleFileOptions;
+#[cfg(feature = "bench")]
+use zip::ZipWriter;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BenchmarkReport {
@@ -27,8 +38,14 @@ pub struct BenchmarkReport {
     pub integrity_verified: bool,
 }
 
-fn generate_synthetic_archive(path: &Path, num_entries: usize, entry_size_bytes: usize) -> Result<()> {
-    let file = File::create(path).with_context(|| format!("Failed to create benchmark archive at {:?}", path))?;
+#[cfg(feature = "bench")]
+fn generate_synthetic_archive(
+    path: &Path,
+    num_entries: usize,
+    entry_size_bytes: usize,
+) -> Result<()> {
+    let file = File::create(path)
+        .with_context(|| format!("Failed to create benchmark archive at {:?}", path))?;
     let mut zip = ZipWriter::new(file);
 
     for i in 0..num_entries {
@@ -51,6 +68,7 @@ fn generate_synthetic_archive(path: &Path, num_entries: usize, entry_size_bytes:
     Ok(())
 }
 
+#[cfg(feature = "bench")]
 pub fn run_bench(
     archive: Option<PathBuf>,
     entries: usize,
@@ -58,16 +76,27 @@ pub fn run_bench(
     json: bool,
     verbose: bool,
 ) -> Result<()> {
-    let temp_workspace = tempdir().with_context(|| "Failed to create temporary benchmark workspace")?;
+    let temp_workspace =
+        tempdir().with_context(|| "Failed to create temporary benchmark workspace")?;
     let (archive_std, archive_rec, workload_name) = match archive {
         Some(user_archive) => {
             if !user_archive.is_file() {
                 anyhow::bail!("Specified archive does not exist: {:?}", user_archive);
             }
             let copy_path = temp_workspace.path().join("archive_reclaim_copy.zip");
-            fs::copy(&user_archive, &copy_path)
-                .with_context(|| format!("Failed to stage copy of {:?} for reclamation test", user_archive))?;
-            let name = format!("Custom Archive ({})", user_archive.file_name().unwrap_or_default().to_string_lossy());
+            fs::copy(&user_archive, &copy_path).with_context(|| {
+                format!(
+                    "Failed to stage copy of {:?} for reclamation test",
+                    user_archive
+                )
+            })?;
+            let name = format!(
+                "Custom Archive ({})",
+                user_archive
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+            );
             (user_archive, copy_path, name)
         }
         None => {
@@ -77,12 +106,20 @@ pub fn run_bench(
             let synth_rec = temp_workspace.path().join("synthetic_rec.zip");
 
             if !json {
-                println!("Generating synthetic benchmark workload ({} entries x {} MB)...", entries_count, mb);
+                println!(
+                    "Generating synthetic benchmark workload ({} entries x {} MB)...",
+                    entries_count, mb
+                );
             }
             generate_synthetic_archive(&synth_std, entries_count, mb * 1024 * 1024)?;
             fs::copy(&synth_std, &synth_rec)?;
 
-            let name = format!("Synthetic Workload ({} entries x {} MB = {} MB total)", entries_count, mb, entries_count * mb);
+            let name = format!(
+                "Synthetic Workload ({} entries x {} MB = {} MB total)",
+                entries_count,
+                mb,
+                entries_count * mb
+            );
             (synth_std, synth_rec, name)
         }
     };
@@ -124,7 +161,10 @@ pub fn run_bench(
 
     // Verify byte-level integrity across extracted outputs (ignoring internal .unpackr state directory)
     let mut integrity_verified = true;
-    for entry in walkdir::WalkDir::new(&dest_std).into_iter().filter_map(|e| e.ok()) {
+    for entry in walkdir::WalkDir::new(&dest_std)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
         if entry.file_type().is_file() {
             let rel_path = entry.path().strip_prefix(&dest_std)?;
             if rel_path.starts_with(".unpackr") {
@@ -144,7 +184,9 @@ pub fn run_bench(
         }
     }
 
-    let peak_saved = summary_std.peak_disk_footprint_bytes.saturating_sub(summary_rec.peak_disk_footprint_bytes);
+    let peak_saved = summary_std
+        .peak_disk_footprint_bytes
+        .saturating_sub(summary_rec.peak_disk_footprint_bytes);
     let pct_saved = if summary_std.peak_disk_footprint_bytes > 0 {
         (peak_saved as f64 / summary_std.peak_disk_footprint_bytes as f64) * 100.0
     } else {
@@ -177,10 +219,23 @@ pub fn run_bench(
     println!("================================================================================");
     println!("Workload:               {}", report.workload);
     println!("Extracted Files:        {}", report.total_entries);
-    println!("Total Data Size:        {}", format_bytes(report.uncompressed_bytes));
-    println!("Integrity Check:        {}", if report.integrity_verified { "PASSED (100% byte-for-byte fidelity)" } else { "FAILED (data mismatch)" });
+    println!(
+        "Total Data Size:        {}",
+        format_bytes(report.uncompressed_bytes)
+    );
+    println!(
+        "Integrity Check:        {}",
+        if report.integrity_verified {
+            "PASSED (100% byte-for-byte fidelity)"
+        } else {
+            "FAILED (data mismatch)"
+        }
+    );
     println!("--------------------------------------------------------------------------------");
-    println!("{:<24} {:<20} {:<20} {:<16}", "Metric", "Standard Mode", "Reclaim Mode", "Improvement");
+    println!(
+        "{:<24} {:<20} {:<20} {:<16}",
+        "Metric", "Standard Mode", "Reclaim Mode", "Improvement"
+    );
     println!("--------------------------------------------------------------------------------");
     println!(
         "{:<24} {:<20} {:<20} -{:.1}% (-{})",
@@ -195,7 +250,10 @@ pub fn run_bench(
         "Extraction Duration",
         format!("{:.2}s", report.standard_duration_secs),
         format!("{:.2}s", report.reclaim_duration_secs),
-        format!("{:+.2}s", report.reclaim_duration_secs - report.standard_duration_secs)
+        format!(
+            "{:+.2}s",
+            report.reclaim_duration_secs - report.standard_duration_secs
+        )
     );
     println!(
         "{:<24} {:<20} {:<20} {:<16}",
@@ -214,4 +272,15 @@ pub fn run_bench(
     println!("================================================================================");
 
     Ok(())
+}
+
+#[cfg(not(feature = "bench"))]
+pub fn run_bench(
+    _archive: Option<PathBuf>,
+    _entries: usize,
+    _size_mb: usize,
+    _json: bool,
+    _verbose: bool,
+) -> Result<()> {
+    anyhow::bail!("Benchmark command requires compiling with `--features bench`");
 }

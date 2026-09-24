@@ -17,11 +17,16 @@ libc = "0.2"
 blake3 = "1.5"
 walkdir = "2.5"
 tempfile = "3.10"
-zip = { version = "2.1", default-features = false, features = ["deflate"] }
+zip = { version = "2.1", default-features = false, features = ["deflate"], optional = true }
 clap_complete = "4.5"
 
 [dev-dependencies]
 criterion = "0.5"
+zip = { version = "2.1", default-features = false, features = ["deflate"] }
+
+[features]
+default = ["bench"]
+bench = ["dep:zip"]
 
 [[bench]]
 name = "engine_bench"

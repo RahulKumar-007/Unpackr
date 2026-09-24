@@ -45,9 +45,9 @@ fn test_thousand_entries_deep_hierarchy_stress() {
 
             let (size, is_deflated) = match f % 4 {
                 0 => ((f % 3000) + 10, false), // Sub-block: 10 to 3010 bytes (Stored)
-                1 => (4096, true),              // Exactly 1 block (Deflated)
-                2 => (8192, false),             // Exactly 2 blocks (Stored)
-                _ => (32768, true),             // 8 blocks (Deflated)
+                1 => (4096, true),             // Exactly 1 block (Deflated)
+                2 => (8192, false),            // Exactly 2 blocks (Stored)
+                _ => (32768, true),            // 8 blocks (Deflated)
             };
 
             let payload: Vec<u8> = (0..size).map(|b| ((b * 31 + f) % 251 + 1) as u8).collect();
@@ -98,7 +98,11 @@ fn test_thousand_entries_deep_hierarchy_stress() {
     // 5. Verify Content of Extracted Files
     for (filename, expected) in file_payloads.iter() {
         let extracted_path = dest_dir.join(filename);
-        assert!(extracted_path.is_file(), "File missing: {:?}", extracted_path);
+        assert!(
+            extracted_path.is_file(),
+            "File missing: {:?}",
+            extracted_path
+        );
         let content = fs::read(&extracted_path).unwrap();
         assert_eq!(
             content.len(),
@@ -241,7 +245,8 @@ fn test_repeated_rolling_crash_recovery_stress() {
 
         for i in 0..num_entries {
             let name = format!("chunk_{:02}.dat", i);
-            let opts = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+            let opts =
+                SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
             zip.start_file(&name, opts).unwrap();
             let data = vec![(i as u8).wrapping_add(1); entry_size];
             zip.write_all(&data).unwrap();
@@ -307,7 +312,11 @@ fn test_repeated_rolling_crash_recovery_stress() {
     let entry_10 = &inspection.entries[10];
     tracker.set_entry_extracting(&entry_10.name);
     let orphaned_tmp = dest_dir.join(".chunk_10.dat.unpackr_tmp_9999");
-    fs::write(&orphaned_tmp, b"corrupted partial data from interrupted stream").unwrap();
+    fs::write(
+        &orphaned_tmp,
+        b"corrupted partial data from interrupted stream",
+    )
+    .unwrap();
     assert!(orphaned_tmp.exists());
 
     // Entries 11..19 remain Pending. Archive blocks for 10..19 are unpunched.
@@ -331,8 +340,14 @@ fn test_repeated_rolling_crash_recovery_stress() {
         .expect("Rolling crash resume failed");
 
     assert_eq!(resume_summary.extracted_files, num_entries);
-    assert!(!orphaned_tmp.exists(), "Orphaned temp file was not cleaned!");
-    assert!(dest_dir.join("chunk_10.dat").is_file(), "Re-extracted file missing!");
+    assert!(
+        !orphaned_tmp.exists(),
+        "Orphaned temp file was not cleaned!"
+    );
+    assert!(
+        dest_dir.join("chunk_10.dat").is_file(),
+        "Re-extracted file missing!"
+    );
 
     // Verify content of all 20 files
     for (i, orig) in original_data.iter().enumerate().take(num_entries) {

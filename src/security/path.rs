@@ -36,6 +36,9 @@ pub fn is_windows_reserved_device_name(segment: &str) -> bool {
             | "PRN"
             | "AUX"
             | "NUL"
+            | "CONIN$"
+            | "CONOUT$"
+            | "COM0"
             | "COM1"
             | "COM2"
             | "COM3"
@@ -45,6 +48,7 @@ pub fn is_windows_reserved_device_name(segment: &str) -> bool {
             | "COM7"
             | "COM8"
             | "COM9"
+            | "LPT0"
             | "LPT1"
             | "LPT2"
             | "LPT3"
@@ -67,7 +71,7 @@ pub fn sanitize_entry_path(raw_path: &str) -> Result<PathBuf, PathSecurityError>
         return Err(PathSecurityError::EmptyPath);
     }
 
-    if raw_path.contains('\0') {
+    if raw_path.contains('\0') || raw_path.contains('\u{FFFD}') {
         return Err(PathSecurityError::InvalidCharacters(raw_path.to_string()));
     }
 
@@ -125,7 +129,10 @@ pub fn sanitize_entry_path(raw_path: &str) -> Result<PathBuf, PathSecurityError>
 
 /// Resolves a sanitized entry path inside the destination root directory.
 /// Ensures the resolved target path is lexically within `dest_root`.
-pub fn resolve_safe_dest(dest_root: &Path, sanitized_path: &Path) -> Result<PathBuf, PathSecurityError> {
+pub fn resolve_safe_dest(
+    dest_root: &Path,
+    sanitized_path: &Path,
+) -> Result<PathBuf, PathSecurityError> {
     let resolved = dest_root.join(sanitized_path);
     // Double check that the resolved path starts with dest_root
     if !resolved.starts_with(dest_root) {
@@ -142,7 +149,10 @@ pub fn resolve_safe_dest(dest_root: &Path, sanitized_path: &Path) -> Result<Path
 /// This prevents Symlink Poisoning / Traversal attacks where an attacker pre-creates
 /// a symlink (e.g. `dest/link -> /etc`) to fool subsequent file writes into escaping
 /// the extraction directory.
-pub fn check_symlink_traversal(dest_root: &Path, sanitized_path: &Path) -> Result<(), PathSecurityError> {
+pub fn check_symlink_traversal(
+    dest_root: &Path,
+    sanitized_path: &Path,
+) -> Result<(), PathSecurityError> {
     let mut current = dest_root.to_path_buf();
     let components: Vec<_> = sanitized_path.components().collect();
 
@@ -194,7 +204,9 @@ pub fn validate_symlink_target(
             Component::CurDir => {}
             Component::ParentDir => {
                 if !current.pop() || !current.starts_with(dest_root) {
-                    return Err(PathSecurityError::SymlinkTargetOutside(target_str.to_string()));
+                    return Err(PathSecurityError::SymlinkTargetOutside(
+                        target_str.to_string(),
+                    ));
                 }
             }
             Component::RootDir | Component::Prefix(_) => {
@@ -204,7 +216,9 @@ pub fn validate_symlink_target(
     }
 
     if !current.starts_with(dest_root) {
-        return Err(PathSecurityError::SymlinkTargetOutside(target_str.to_string()));
+        return Err(PathSecurityError::SymlinkTargetOutside(
+            target_str.to_string(),
+        ));
     }
 
     Ok(current)
@@ -297,6 +311,22 @@ mod tests {
             sanitize_entry_path("lpt1"),
             Err(PathSecurityError::ReservedDeviceName(_))
         ));
+        assert!(matches!(
+            sanitize_entry_path("COM0"),
+            Err(PathSecurityError::ReservedDeviceName(_))
+        ));
+        assert!(matches!(
+            sanitize_entry_path("dir/LPT0.txt"),
+            Err(PathSecurityError::ReservedDeviceName(_))
+        ));
+        assert!(matches!(
+            sanitize_entry_path("CONIN$"),
+            Err(PathSecurityError::ReservedDeviceName(_))
+        ));
+        assert!(matches!(
+            sanitize_entry_path("CONOUT$"),
+            Err(PathSecurityError::ReservedDeviceName(_))
+        ));
     }
 
     #[test]
@@ -331,22 +361,23 @@ mod tests {
 
     #[test]
     fn test_symlink_target_validation() {
-        let dest = Path::new("/tmp/test_dest");
-        let link_dir = Path::new("/tmp/test_dest/subdir");
+        let temp = tempfile::tempdir().unwrap();
+        let dest = temp.path();
+        let link_dir = dest.join("subdir");
 
         // Safe relative link
-        assert!(validate_symlink_target(dest, link_dir, "foo.txt").is_ok());
-        assert!(validate_symlink_target(dest, link_dir, "../other.txt").is_ok());
+        assert!(validate_symlink_target(dest, &link_dir, "foo.txt").is_ok());
+        assert!(validate_symlink_target(dest, &link_dir, "../other.txt").is_ok());
 
         // Escapes dest via traversal
         assert!(matches!(
-            validate_symlink_target(dest, link_dir, "../../escaped.txt"),
+            validate_symlink_target(dest, &link_dir, "../../escaped.txt"),
             Err(PathSecurityError::SymlinkTargetOutside(_))
         ));
 
         // Absolute link target
         assert!(matches!(
-            validate_symlink_target(dest, link_dir, "/etc/passwd"),
+            validate_symlink_target(dest, &link_dir, "/etc/passwd"),
             Err(PathSecurityError::AbsolutePath(_))
         ));
     }

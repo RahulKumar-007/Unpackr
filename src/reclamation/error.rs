@@ -8,7 +8,9 @@ pub enum ReclamationError {
     #[error("Storage reclamation is not supported on this platform")]
     UnsupportedPlatform,
 
-    #[error("Safety violation: attempted to punch outside entry data boundary [0x{start:X}, 0x{end:X})")]
+    #[error(
+        "Safety violation: attempted to punch outside entry data boundary [0x{start:X}, 0x{end:X})"
+    )]
     SafetyBoundaryViolation { start: u64, end: u64 },
 
     #[error("Safety violation: attempted to punch into Central Directory at offset 0x{offset:X}")]

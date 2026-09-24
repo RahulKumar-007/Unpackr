@@ -1,6 +1,6 @@
-use std::path::Path;
-use anyhow::Result;
 use crate::archive::ZipInspector;
+use anyhow::Result;
+use std::path::Path;
 
 pub fn format_bytes(bytes: u64) -> String {
     const KB: u64 = 1024;
@@ -31,15 +31,40 @@ pub fn run_inspect(archive_path: &Path, json: bool, limit: Option<usize>) -> Res
     println!("                           UNPACKR ARCHIVE INSPECTION                           ");
     println!("================================================================================");
     println!("Archive Path:         {}", inspection.path.display());
-    println!("Logical File Size:    {}", format_bytes(inspection.file_size));
+    println!(
+        "Logical File Size:    {}",
+        format_bytes(inspection.file_size)
+    );
     println!("Archive Identity:     {}", inspection.identity);
     println!("Total Entries:        {}", inspection.total_entries);
-    println!("Uncompressed Data:    {}", format_bytes(inspection.total_uncompressed_size));
-    println!("Compressed Data:      {}", format_bytes(inspection.total_compressed_size));
-    println!("Central Dir Offset:   0x{:08X} ({})", inspection.central_directory_offset, inspection.central_directory_offset);
-    println!("Central Dir Size:     {}", format_bytes(inspection.central_directory_size));
-    println!("Zip64 Extended:       {}", if inspection.is_zip64 { "Yes" } else { "No" });
-    println!("Overlapping Streams:  {}", if inspection.has_overlapping_entries { "WARNING: Yes (in-place reclamation forbidden)" } else { "No (safe for reclamation)" });
+    println!(
+        "Uncompressed Data:    {}",
+        format_bytes(inspection.total_uncompressed_size)
+    );
+    println!(
+        "Compressed Data:      {}",
+        format_bytes(inspection.total_compressed_size)
+    );
+    println!(
+        "Central Dir Offset:   0x{:08X} ({})",
+        inspection.central_directory_offset, inspection.central_directory_offset
+    );
+    println!(
+        "Central Dir Size:     {}",
+        format_bytes(inspection.central_directory_size)
+    );
+    println!(
+        "Zip64 Extended:       {}",
+        if inspection.is_zip64 { "Yes" } else { "No" }
+    );
+    println!(
+        "Overlapping Streams:  {}",
+        if inspection.has_overlapping_entries {
+            "WARNING: Yes (in-place reclamation forbidden)"
+        } else {
+            "No (safe for reclamation)"
+        }
+    );
     println!("--------------------------------------------------------------------------------");
     println!(
         "{:<5} {:<32} {:<10} {:<12} {:<12} {:<8} {:<10} {:<10}",
@@ -55,19 +80,21 @@ pub fn run_inspect(archive_path: &Path, json: bool, limit: Option<usize>) -> Res
             entry.name.clone()
         };
 
-        let method_str = match entry.compression_method {
-            crate::archive::CompressionMethod::Stored => "Stored",
-            crate::archive::CompressionMethod::Deflated => "Deflate",
-            crate::archive::CompressionMethod::Unsupported(_v) => "Unknown",
-        };
+        let method_str = entry.compression_method.as_str();
 
         println!(
             "{:<5} {:<32} {:<10} {:<12} {:<12} {:>6.1}%  0x{:08X} 0x{:08X}",
             entry.index,
             display_name,
             method_str,
-            format_bytes(entry.compressed_size).split_whitespace().next().unwrap_or("-"),
-            format_bytes(entry.uncompressed_size).split_whitespace().next().unwrap_or("-"),
+            format_bytes(entry.compressed_size)
+                .split_whitespace()
+                .next()
+                .unwrap_or("-"),
+            format_bytes(entry.uncompressed_size)
+                .split_whitespace()
+                .next()
+                .unwrap_or("-"),
             entry.savings_ratio(),
             entry.crc32,
             entry.data_offset

@@ -1,7 +1,7 @@
-use std::path::PathBuf;
-use anyhow::Result;
 use crate::cli::inspect::format_bytes;
 use crate::extraction::{CollisionPolicy, ExtractionEngine, ResumeOptions};
+use anyhow::Result;
+use std::path::PathBuf;
 
 #[allow(clippy::too_many_arguments)]
 pub fn run_resume(
@@ -10,7 +10,7 @@ pub fn run_resume(
     archive: Option<PathBuf>,
     retry_failed: bool,
     verify_existing: bool,
-    collision: Option<String>,
+    collision: Option<CollisionPolicy>,
     reclaim_archive: bool,
     max_total_size: Option<u64>,
     max_file_size: Option<u64>,
@@ -19,9 +19,7 @@ pub fn run_resume(
     verbose: bool,
     quiet: bool,
 ) -> Result<()> {
-    let collision_policy = collision
-        .as_deref()
-        .map(CollisionPolicy::from_str_lossy);
+    let collision_policy = collision;
 
     let options = ResumeOptions {
         destination_override: destination,
@@ -36,7 +34,7 @@ pub fn run_resume(
         quiet: quiet || json,
         max_total_size,
         max_file_size,
-        max_entries,
+        max_entries: max_entries.or(Some(crate::extraction::DEFAULT_MAX_ENTRIES)),
     };
 
     let summary = ExtractionEngine::resume(target, &options)?;
@@ -57,15 +55,30 @@ pub fn run_resume(
     println!("Extracted Files:      {}", summary.extracted_files);
     println!("Created Directories:  {}", summary.created_directories);
     println!("Skipped Files:        {}", summary.skipped_files);
-    println!("Data Written:         {}", format_bytes(summary.total_uncompressed_bytes));
+    println!(
+        "Data Written:         {}",
+        format_bytes(summary.total_uncompressed_bytes)
+    );
     if summary.sparse_bytes_saved > 0 {
-        println!("Sparse Space Saved:   {}", format_bytes(summary.sparse_bytes_saved));
+        println!(
+            "Sparse Space Saved:   {}",
+            format_bytes(summary.sparse_bytes_saved)
+        );
     }
     if summary.reclaimed_archive_bytes > 0 {
-        println!("Archive Reclaimed:    {}", format_bytes(summary.reclaimed_archive_bytes));
+        println!(
+            "Archive Reclaimed:    {}",
+            format_bytes(summary.reclaimed_archive_bytes)
+        );
     }
-    println!("Peak Disk Footprint:  {}", format_bytes(summary.peak_disk_footprint_bytes));
-    println!("Throughput:           {:.1} MB/s", summary.throughput_mb_per_sec);
+    println!(
+        "Peak Disk Footprint:  {}",
+        format_bytes(summary.peak_disk_footprint_bytes)
+    );
+    println!(
+        "Throughput:           {:.1} MB/s",
+        summary.throughput_mb_per_sec
+    );
     println!("Duration:             {:.2?}", summary.duration);
     println!("================================================================================");
 

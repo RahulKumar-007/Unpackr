@@ -16,7 +16,11 @@ fn create_sample_archive(path: &std::path::Path, count: usize) {
     for i in 0..count {
         let name = format!("file_{:03}.txt", i);
         zip.start_file(&name, SimpleFileOptions::default()).unwrap();
-        let content = format!("Payload data for entry {} with repetitive string padding ...\n", i).repeat(100);
+        let content = format!(
+            "Payload data for entry {} with repetitive string padding ...\n",
+            i
+        )
+        .repeat(100);
         zip.write_all(content.as_bytes()).unwrap();
     }
 
@@ -84,14 +88,14 @@ fn test_crash_recovery_cleans_orphaned_tmp_and_resumes() {
         ..Default::default()
     };
 
-    let summary = ExtractionEngine::resume(
-        dest_dir.path().to_str().unwrap(),
-        &resume_opts,
-    )
-    .expect("Resume failed");
+    let summary = ExtractionEngine::resume(dest_dir.path().to_str().unwrap(), &resume_opts)
+        .expect("Resume failed");
 
     // 4. Verify orphaned temporary file was cleaned up
-    assert!(!orphaned_tmp.exists(), "Orphaned tmp file should have been removed");
+    assert!(
+        !orphaned_tmp.exists(),
+        "Orphaned tmp file should have been removed"
+    );
 
     // 5. Verify all files are extracted and correct
     assert_eq!(summary.total_entries, 3);
@@ -103,7 +107,11 @@ fn test_crash_recovery_cleans_orphaned_tmp_and_resumes() {
     // 6. Verify integrity check passes 100%
     let updated_tracker = StateTracker::load_from_file(&manifest_path).unwrap();
     let failures = updated_tracker.verify_extracted_output();
-    assert!(failures.is_empty(), "Integrity failures on resume: {:?}", failures);
+    assert!(
+        failures.is_empty(),
+        "Integrity failures on resume: {:?}",
+        failures
+    );
     assert_eq!(updated_tracker.manifest.verified_count(), 3);
 }
 
@@ -169,8 +177,12 @@ fn test_resume_rejects_tampered_source_archive() {
 
     // Tamper with archive
     {
-        let mut file = fs::OpenOptions::new().append(true).open(&archive_path).unwrap();
-        file.write_all(b"tampering corrupt bytes appended to zip").unwrap();
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .open(&archive_path)
+            .unwrap();
+        file.write_all(b"tampering corrupt bytes appended to zip")
+            .unwrap();
     }
 
     let resume_opts = ResumeOptions::default();
@@ -178,7 +190,9 @@ fn test_resume_rejects_tampered_source_archive() {
 
     assert!(result.is_err());
     let err_msg = result.unwrap_err().to_string();
-    assert!(err_msg.contains("validation failed on resume") || err_msg.contains("identity mismatch"));
+    assert!(
+        err_msg.contains("validation failed on resume") || err_msg.contains("identity mismatch")
+    );
 }
 
 #[test]
@@ -209,7 +223,8 @@ fn test_resume_detects_and_reextracts_deleted_verified_file() {
 
     // Resume
     let resume_opts = ResumeOptions::default();
-    let summary = ExtractionEngine::resume(dest_dir.path().to_str().unwrap(), &resume_opts).unwrap();
+    let summary =
+        ExtractionEngine::resume(dest_dir.path().to_str().unwrap(), &resume_opts).unwrap();
 
     // file_001.txt was detected missing, reset to Pending, and re-extracted!
     assert!(deleted_file.exists());
@@ -231,7 +246,11 @@ fn test_sigkill_child_process_recovery() {
 
     // Spawn extraction child process
     let mut child = Command::new(bin_path)
-        .args(["extract", archive_path.to_str().unwrap(), dest_dir.path().to_str().unwrap()])
+        .args([
+            "extract",
+            archive_path.to_str().unwrap(),
+            dest_dir.path().to_str().unwrap(),
+        ])
         .spawn()
         .expect("Failed to spawn unpackr child process");
 
@@ -241,7 +260,10 @@ fn test_sigkill_child_process_recovery() {
     while !manifest_path.exists() && start.elapsed() < Duration::from_secs(3) {
         std::thread::sleep(Duration::from_millis(1));
     }
-    assert!(manifest_path.exists(), "Manifest was not created in time by child process");
+    assert!(
+        manifest_path.exists(),
+        "Manifest was not created in time by child process"
+    );
 
     // Sleep 5ms so it is actively decompressing entries
     std::thread::sleep(Duration::from_millis(5));
@@ -255,7 +277,8 @@ fn test_sigkill_child_process_recovery() {
     // Verify manifest exists and is valid JSON (atomic rename prevented corruption)
     assert!(manifest_path.exists());
     let manifest_content = fs::read_to_string(&manifest_path).unwrap();
-    let parsed: serde_json::Value = serde_json::from_str(&manifest_content).expect("Manifest must be valid JSON even after SIGKILL");
+    let parsed: serde_json::Value = serde_json::from_str(&manifest_content)
+        .expect("Manifest must be valid JSON even after SIGKILL");
     assert_eq!(parsed["version"], 1);
 
     // Now resume extraction using CLI
@@ -264,12 +287,20 @@ fn test_sigkill_child_process_recovery() {
         .output()
         .expect("Failed to execute unpackr resume");
 
-    assert!(resume_output.status.success(), "Resume failed: {}", String::from_utf8_lossy(&resume_output.stderr));
+    assert!(
+        resume_output.status.success(),
+        "Resume failed: {}",
+        String::from_utf8_lossy(&resume_output.stderr)
+    );
 
     // Verify all 40 files are extracted
     for i in 0..40 {
         let fpath = dest_dir.path().join(format!("file_{:03}.txt", i));
-        assert!(fpath.exists(), "File {:?} was not extracted after resume", fpath);
+        assert!(
+            fpath.exists(),
+            "File {:?} was not extracted after resume",
+            fpath
+        );
     }
 
     // Run unpackr verify
@@ -294,7 +325,11 @@ fn test_cli_cancel_command() {
 
     // 1. Run extraction
     let extract_output = Command::new(bin_path)
-        .args(["extract", archive_path.to_str().unwrap(), dest_dir.path().to_str().unwrap()])
+        .args([
+            "extract",
+            archive_path.to_str().unwrap(),
+            dest_dir.path().to_str().unwrap(),
+        ])
         .output()
         .unwrap();
     assert!(extract_output.status.success());

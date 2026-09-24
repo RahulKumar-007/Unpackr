@@ -1,6 +1,6 @@
+use crate::security::path::PathSecurityError;
 use std::path::PathBuf;
 use thiserror::Error;
-use crate::security::path::PathSecurityError;
 
 #[derive(Error, Debug)]
 pub enum ExtractionError {
@@ -32,10 +32,7 @@ pub enum ExtractionError {
     },
 
     #[error("Destination collision for entry '{entry}': target file '{path}' already exists")]
-    DestinationCollision {
-        entry: String,
-        path: PathBuf,
-    },
+    DestinationCollision { entry: String, path: PathBuf },
 
     #[error("Unsupported compression method: {0:?}")]
     UnsupportedCompression(crate::archive::CompressionMethod),
@@ -48,10 +45,7 @@ pub enum ExtractionError {
     },
 
     #[error("Security violation for entry '{entry}': {reason}")]
-    ForbiddenDeviceType {
-        entry: String,
-        reason: &'static str,
-    },
+    ForbiddenDeviceType { entry: String, reason: &'static str },
 
     #[error("Resource limit exceeded: {0}")]
     ResourceLimitExceeded(String),

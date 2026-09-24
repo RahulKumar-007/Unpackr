@@ -32,14 +32,20 @@ fn test_streaming_extraction_accuracy() {
     let plain_path = dest_dir.path().join("plain.txt");
     assert!(plain_path.exists());
     let mut plain_content = String::new();
-    File::open(&plain_path).unwrap().read_to_string(&mut plain_content).unwrap();
+    File::open(&plain_path)
+        .unwrap()
+        .read_to_string(&mut plain_content)
+        .unwrap();
     assert_eq!(plain_content, "This is uncompressed text stored as is.");
 
     // Verify nested/data.txt
     let nested_path = dest_dir.path().join("nested/data.txt");
     assert!(nested_path.exists());
     let mut nested_content = Vec::new();
-    File::open(&nested_path).unwrap().read_to_end(&mut nested_content).unwrap();
+    File::open(&nested_path)
+        .unwrap()
+        .read_to_end(&mut nested_content)
+        .unwrap();
     assert_eq!(nested_content.len(), 14000);
     assert_eq!(&nested_content[..28], b"Decompression testing data! ");
 
@@ -62,7 +68,8 @@ fn test_sparse_hole_extraction() {
     {
         let file = File::create(zip_file.path()).unwrap();
         let mut zip = ZipWriter::new(file);
-        zip.start_file("sparse_test.bin", SimpleFileOptions::default()).unwrap();
+        zip.start_file("sparse_test.bin", SimpleFileOptions::default())
+            .unwrap();
 
         let mut payload = Vec::with_capacity(1024 * 1024);
         payload.extend_from_slice(&[0xAA; 256 * 1024]);
@@ -93,7 +100,10 @@ fn test_sparse_hole_extraction() {
     assert_eq!(fs::metadata(&extracted_path).unwrap().len(), 1024 * 1024);
 
     let mut read_data = Vec::new();
-    File::open(&extracted_path).unwrap().read_to_end(&mut read_data).unwrap();
+    File::open(&extracted_path)
+        .unwrap()
+        .read_to_end(&mut read_data)
+        .unwrap();
     assert_eq!(&read_data[..256 * 1024], &[0xAA; 256 * 1024]);
     assert_eq!(&read_data[256 * 1024..768 * 1024], &[0x00; 512 * 1024]);
     assert_eq!(&read_data[768 * 1024..], &[0xBB; 256 * 1024]);
@@ -122,7 +132,12 @@ fn test_zip_slip_rejection_at_extraction() {
     assert!(matches!(err, ExtractionError::Security { .. }));
 
     // Verify no file was created outside destination
-    assert!(!dest_dir.path().parent().unwrap().join("etc/passwd").exists());
+    assert!(!dest_dir
+        .path()
+        .parent()
+        .unwrap()
+        .join("etc/passwd")
+        .exists());
 }
 
 #[test]
@@ -171,7 +186,8 @@ fn test_collision_policies_at_engine_level() {
     {
         let file = File::create(zip_file.path()).unwrap();
         let mut zip = ZipWriter::new(file);
-        zip.start_file("test.txt", SimpleFileOptions::default()).unwrap();
+        zip.start_file("test.txt", SimpleFileOptions::default())
+            .unwrap();
         zip.write_all(b"new content").unwrap();
         zip.finish().unwrap();
     }
@@ -212,4 +228,102 @@ fn test_collision_policies_at_engine_level() {
     let renamed = dest_dir.path().join("test.1.txt");
     assert!(renamed.exists());
     assert_eq!(fs::read(&renamed).unwrap(), b"new content");
+}
+
+#[test]
+fn test_unsupported_compression_method_error() {
+    let dest_dir = tempdir().unwrap();
+    let zip_file = NamedTempFile::new().unwrap();
+
+    {
+        let file = File::create(zip_file.path()).unwrap();
+        let mut zip = ZipWriter::new(file);
+        zip.start_file(
+            "test.txt",
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored),
+        )
+        .unwrap();
+        zip.write_all(b"sample data").unwrap();
+        zip.finish().unwrap();
+    }
+
+    // Tamper the compression method in local file header (offset 8) and central directory
+    let mut bytes = fs::read(zip_file.path()).unwrap();
+    bytes[8] = 14; // LZMA
+    bytes[9] = 0;
+    for i in 0..bytes.len() - 4 {
+        if &bytes[i..i + 4] == b"PK\x01\x02" {
+            bytes[i + 10] = 14;
+            bytes[i + 11] = 0;
+        }
+    }
+    fs::write(zip_file.path(), &bytes).unwrap();
+
+    let options = ExtractionOptions {
+        destination: dest_dir.path().to_path_buf(),
+        collision_policy: CollisionPolicy::Fail,
+        enable_sparse: true,
+        max_compression_ratio: 100.0,
+        reclaim_archive: false,
+        state_dir: None,
+        verbose: false,
+        quiet: false,
+        ..Default::default()
+    };
+
+    let res = ExtractionEngine::extract(zip_file.path(), &options);
+    assert!(res.is_err());
+    assert!(matches!(
+        res.unwrap_err(),
+        ExtractionError::UnsupportedCompression(unpackr::archive::CompressionMethod::Unsupported(
+            14
+        ))
+    ));
+}
+
+#[test]
+fn test_crc32_mismatch_error() {
+    let dest_dir = tempdir().unwrap();
+    let zip_file = NamedTempFile::new().unwrap();
+
+    {
+        let file = File::create(zip_file.path()).unwrap();
+        let mut zip = ZipWriter::new(file);
+        zip.start_file(
+            "corrupt_crc.txt",
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored),
+        )
+        .unwrap();
+        zip.write_all(b"authentic payload").unwrap();
+        zip.finish().unwrap();
+    }
+
+    // Tamper payload byte without updating CRC in header
+    let mut bytes = fs::read(zip_file.path()).unwrap();
+    for i in 0..bytes.len() - 9 {
+        if &bytes[i..i + 9] == b"authentic" {
+            bytes[i] = b'X';
+            break;
+        }
+    }
+    fs::write(zip_file.path(), &bytes).unwrap();
+
+    let options = ExtractionOptions {
+        destination: dest_dir.path().to_path_buf(),
+        collision_policy: CollisionPolicy::Fail,
+        enable_sparse: true,
+        max_compression_ratio: 100.0,
+        reclaim_archive: false,
+        state_dir: None,
+        verbose: false,
+        quiet: false,
+        ..Default::default()
+    };
+
+    let res = ExtractionEngine::extract(zip_file.path(), &options);
+    assert!(res.is_err());
+    assert!(matches!(
+        res.unwrap_err(),
+        ExtractionError::CrcMismatch { .. }
+    ));
 }

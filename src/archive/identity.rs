@@ -1,9 +1,9 @@
+use anyhow::{Context, Result};
+use blake3::Hasher;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use std::time::SystemTime;
-use anyhow::{Context, Result};
-use blake3::Hasher;
 
 /// Computes a fast, collision-resistant identity hash for a ZIP archive without
 /// hashing the entire multi-gigabyte payload.
@@ -14,8 +14,11 @@ use blake3::Hasher;
 /// 3. First 64 KB of the file (covers file signature and first local file header)
 /// 4. Tail of the file (up to 128 KB, covering EOCD and parts of Central Directory)
 pub fn compute_archive_identity(path: &Path) -> Result<String> {
-    let mut file = File::open(path).with_context(|| format!("Failed to open archive: {:?}", path))?;
-    let metadata = file.metadata().with_context(|| "Failed to read archive metadata")?;
+    let mut file =
+        File::open(path).with_context(|| format!("Failed to open archive: {:?}", path))?;
+    let metadata = file
+        .metadata()
+        .with_context(|| "Failed to read archive metadata")?;
     let file_size = metadata.len();
 
     let mut hasher = Hasher::new();
@@ -40,7 +43,8 @@ pub fn compute_archive_identity(path: &Path) -> Result<String> {
 
     // 4. Tail up to 128 KB (or remaining bytes)
     if file_size > head_chunk_size as u64 {
-        let tail_chunk_size = (file_size.saturating_sub(head_chunk_size as u64).min(131072)) as usize;
+        let tail_chunk_size =
+            (file_size.saturating_sub(head_chunk_size as u64).min(131072)) as usize;
         let mut tail_buf = vec![0u8; tail_chunk_size];
         let tail_start = file_size - tail_chunk_size as u64;
         file.seek(SeekFrom::Start(tail_start))?;

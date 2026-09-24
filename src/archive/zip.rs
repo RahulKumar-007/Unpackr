@@ -1,8 +1,8 @@
+use anyhow::{anyhow, bail, Context, Result};
+use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use anyhow::{bail, Context, Result};
-use serde::{Deserialize, Serialize};
 
 use super::entry::{CompressionMethod, EntryState, ZipEntryMetadata};
 use super::identity::compute_archive_identity;
@@ -34,12 +34,15 @@ impl ZipInspector {
     /// Inspects an archive on disk completely without loading entry data into memory.
     /// Streams headers and computes exact offsets, sizes, and metadata.
     pub fn inspect(path: &Path) -> Result<ZipArchiveInspection> {
-        let mut file = File::open(path)
-            .with_context(|| format!("Failed to open archive at {:?}", path))?;
+        let mut file =
+            File::open(path).with_context(|| format!("Failed to open archive at {:?}", path))?;
         let file_size = file.metadata()?.len();
 
         if file_size < 22 {
-            bail!("File is too small to be a valid ZIP archive (size: {} bytes)", file_size);
+            bail!(
+                "File is too small to be a valid ZIP archive (size: {} bytes)",
+                file_size
+            );
         }
 
         let identity = compute_archive_identity(path)?;
@@ -52,11 +55,7 @@ impl ZipInspector {
             Self::check_zip64(&mut file, file_size, &eocd_info)?;
 
         // 3. Parse Central Directory headers
-        let mut entries = Self::parse_central_directory(
-            &mut file,
-            cd_offset,
-            total_entries,
-        )?;
+        let mut entries = Self::parse_central_directory(&mut file, cd_offset, total_entries)?;
 
         // 4. Inspect Local File Headers to find exact data offsets and validate boundaries
         for entry in &mut entries {
@@ -166,19 +165,17 @@ impl ZipInspector {
         };
 
         let offset_in_file = search_start + pos as u64;
+        let disk_num = u16::from_le_bytes([buf[pos + 4], buf[pos + 5]]);
+        let cd_disk = u16::from_le_bytes([buf[pos + 6], buf[pos + 7]]);
+        if disk_num != 0 || cd_disk != 0 {
+            bail!("Multi-disk ZIP archives are not supported");
+        }
+
         let total_entries = u16::from_le_bytes([buf[pos + 10], buf[pos + 11]]);
-        let cd_size = u32::from_le_bytes([
-            buf[pos + 12],
-            buf[pos + 13],
-            buf[pos + 14],
-            buf[pos + 15],
-        ]);
-        let cd_offset = u32::from_le_bytes([
-            buf[pos + 16],
-            buf[pos + 17],
-            buf[pos + 18],
-            buf[pos + 19],
-        ]);
+        let cd_size =
+            u32::from_le_bytes([buf[pos + 12], buf[pos + 13], buf[pos + 14], buf[pos + 15]]);
+        let cd_offset =
+            u32::from_le_bytes([buf[pos + 16], buf[pos + 17], buf[pos + 18], buf[pos + 19]]);
 
         Ok(EocdRecord {
             offset_in_file,
@@ -202,8 +199,14 @@ impl ZipInspector {
                 let sig = u32::from_le_bytes([loc_buf[0], loc_buf[1], loc_buf[2], loc_buf[3]]);
                 if sig == SIGNATURE_ZIP64_EOCD_LOCATOR {
                     let zip64_eocd_offset = u64::from_le_bytes([
-                        loc_buf[8], loc_buf[9], loc_buf[10], loc_buf[11],
-                        loc_buf[12], loc_buf[13], loc_buf[14], loc_buf[15],
+                        loc_buf[8],
+                        loc_buf[9],
+                        loc_buf[10],
+                        loc_buf[11],
+                        loc_buf[12],
+                        loc_buf[13],
+                        loc_buf[14],
+                        loc_buf[15],
                     ]);
 
                     if zip64_eocd_offset < file_size {
@@ -215,16 +218,34 @@ impl ZipInspector {
                             ]);
                             if rec_sig == SIGNATURE_ZIP64_EOCD_RECORD {
                                 let total_entries = u64::from_le_bytes([
-                                    rec_buf[32], rec_buf[33], rec_buf[34], rec_buf[35],
-                                    rec_buf[36], rec_buf[37], rec_buf[38], rec_buf[39],
+                                    rec_buf[32],
+                                    rec_buf[33],
+                                    rec_buf[34],
+                                    rec_buf[35],
+                                    rec_buf[36],
+                                    rec_buf[37],
+                                    rec_buf[38],
+                                    rec_buf[39],
                                 ]);
                                 let cd_size = u64::from_le_bytes([
-                                    rec_buf[40], rec_buf[41], rec_buf[42], rec_buf[43],
-                                    rec_buf[44], rec_buf[45], rec_buf[46], rec_buf[47],
+                                    rec_buf[40],
+                                    rec_buf[41],
+                                    rec_buf[42],
+                                    rec_buf[43],
+                                    rec_buf[44],
+                                    rec_buf[45],
+                                    rec_buf[46],
+                                    rec_buf[47],
                                 ]);
                                 let cd_offset = u64::from_le_bytes([
-                                    rec_buf[48], rec_buf[49], rec_buf[50], rec_buf[51],
-                                    rec_buf[52], rec_buf[53], rec_buf[54], rec_buf[55],
+                                    rec_buf[48],
+                                    rec_buf[49],
+                                    rec_buf[50],
+                                    rec_buf[51],
+                                    rec_buf[52],
+                                    rec_buf[53],
+                                    rec_buf[54],
+                                    rec_buf[55],
                                 ]);
                                 return Ok((cd_offset, cd_size, total_entries, true));
                             }
@@ -270,34 +291,30 @@ impl ZipInspector {
             let method_raw = u16::from_le_bytes([header[10], header[11]]);
             let compression_method = CompressionMethod::from_u16(method_raw);
             let crc32 = u32::from_le_bytes([header[16], header[17], header[18], header[19]]);
-            let mut comp_size = u32::from_le_bytes([
-                header[20], header[21], header[22], header[23],
-            ]) as u64;
-            let mut uncomp_size = u32::from_le_bytes([
-                header[24], header[25], header[26], header[27],
-            ]) as u64;
+            let mut comp_size =
+                u32::from_le_bytes([header[20], header[21], header[22], header[23]]) as u64;
+            let mut uncomp_size =
+                u32::from_le_bytes([header[24], header[25], header[26], header[27]]) as u64;
             let name_len = u16::from_le_bytes([header[28], header[29]]) as usize;
             let extra_len = u16::from_le_bytes([header[30], header[31]]) as usize;
             let comment_len = u16::from_le_bytes([header[32], header[33]]) as usize;
-            let external_attrs = u32::from_le_bytes([
-                header[38], header[39], header[40], header[41],
-            ]);
-            let mut local_header_offset = u32::from_le_bytes([
-                header[42], header[43], header[44], header[45],
-            ]) as u64;
+            let external_attrs =
+                u32::from_le_bytes([header[38], header[39], header[40], header[41]]);
+            let mut local_header_offset =
+                u32::from_le_bytes([header[42], header[43], header[44], header[45]]) as u64;
 
             // Read variable length data
             let mut name_buf = vec![0u8; name_len];
             reader.read_exact(&mut name_buf)?;
-            let name = String::from_utf8_lossy(&name_buf).to_string();
+            let name = String::from_utf8(name_buf)
+                .map_err(|_| anyhow!("Non-UTF-8 entry name at index {}", idx))?;
 
             let mut extra_buf = vec![0u8; extra_len];
             reader.read_exact(&mut extra_buf)?;
 
-            // Skip comment
+            // Skip comment without heap allocation
             if comment_len > 0 {
-                let mut comment_buf = vec![0u8; comment_len];
-                reader.read_exact(&mut comment_buf)?;
+                reader.seek(SeekFrom::Current(comment_len as i64))?;
             }
 
             // Parse Zip64 Extra Field (Tag 0x0001) if present
@@ -353,30 +370,42 @@ impl ZipInspector {
 
                 if *uncomp_size == 0xFFFFFFFF && data_pos + 8 <= end {
                     *uncomp_size = u64::from_le_bytes([
-                        extra_buf[data_pos], extra_buf[data_pos + 1],
-                        extra_buf[data_pos + 2], extra_buf[data_pos + 3],
-                        extra_buf[data_pos + 4], extra_buf[data_pos + 5],
-                        extra_buf[data_pos + 6], extra_buf[data_pos + 7],
+                        extra_buf[data_pos],
+                        extra_buf[data_pos + 1],
+                        extra_buf[data_pos + 2],
+                        extra_buf[data_pos + 3],
+                        extra_buf[data_pos + 4],
+                        extra_buf[data_pos + 5],
+                        extra_buf[data_pos + 6],
+                        extra_buf[data_pos + 7],
                     ]);
                     data_pos += 8;
                 }
 
                 if *comp_size == 0xFFFFFFFF && data_pos + 8 <= end {
                     *comp_size = u64::from_le_bytes([
-                        extra_buf[data_pos], extra_buf[data_pos + 1],
-                        extra_buf[data_pos + 2], extra_buf[data_pos + 3],
-                        extra_buf[data_pos + 4], extra_buf[data_pos + 5],
-                        extra_buf[data_pos + 6], extra_buf[data_pos + 7],
+                        extra_buf[data_pos],
+                        extra_buf[data_pos + 1],
+                        extra_buf[data_pos + 2],
+                        extra_buf[data_pos + 3],
+                        extra_buf[data_pos + 4],
+                        extra_buf[data_pos + 5],
+                        extra_buf[data_pos + 6],
+                        extra_buf[data_pos + 7],
                     ]);
                     data_pos += 8;
                 }
 
                 if *local_header_offset == 0xFFFFFFFF && data_pos + 8 <= end {
                     *local_header_offset = u64::from_le_bytes([
-                        extra_buf[data_pos], extra_buf[data_pos + 1],
-                        extra_buf[data_pos + 2], extra_buf[data_pos + 3],
-                        extra_buf[data_pos + 4], extra_buf[data_pos + 5],
-                        extra_buf[data_pos + 6], extra_buf[data_pos + 7],
+                        extra_buf[data_pos],
+                        extra_buf[data_pos + 1],
+                        extra_buf[data_pos + 2],
+                        extra_buf[data_pos + 3],
+                        extra_buf[data_pos + 4],
+                        extra_buf[data_pos + 5],
+                        extra_buf[data_pos + 6],
+                        extra_buf[data_pos + 7],
                     ]);
                 }
             }
@@ -390,8 +419,12 @@ impl ZipInspector {
     pub fn resolve_data_offset(file: &mut File, local_header_offset: u64) -> Result<u64> {
         file.seek(SeekFrom::Start(local_header_offset))?;
         let mut header = [0u8; 30];
-        file.read_exact(&mut header)
-            .with_context(|| format!("Failed to read Local File Header at offset {}", local_header_offset))?;
+        file.read_exact(&mut header).with_context(|| {
+            format!(
+                "Failed to read Local File Header at offset {}",
+                local_header_offset
+            )
+        })?;
 
         let sig = u32::from_le_bytes([header[0], header[1], header[2], header[3]]);
         if sig != SIGNATURE_LOCAL_FILE_HEADER {

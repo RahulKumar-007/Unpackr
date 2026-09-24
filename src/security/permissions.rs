@@ -29,23 +29,23 @@ pub fn sanitize_unix_mode(external_attributes: u32, is_dir: bool) -> u32 {
     if is_dir {
         // Safe directory default: 0o755
         let base = if raw_mode == 0 { 0o755 } else { raw_mode };
-        // Strip SUID/SGID/Sticky and world-writable, ensure owner rwx (0o700)
-        (base & !0o7002) | 0o700
+        // Strip SUID/SGID/Sticky, group-writable, and world-writable, ensure owner rwx (0o700)
+        (base & !0o7022) | 0o700
     } else {
         // Safe file default: 0o644 (or 0o755 if executable)
-        let base = if raw_mode == 0 {
-            0o644
-        } else {
-            raw_mode
-        };
-        // Strip SUID/SGID/Sticky and world-writable, ensure owner rw (0o600)
-        (base & !0o7002) | 0o600
+        let base = if raw_mode == 0 { 0o644 } else { raw_mode };
+        // Strip SUID/SGID/Sticky, group-writable, and world-writable, ensure owner rw (0o600)
+        (base & !0o7022) | 0o600
     }
 }
 
 /// Safely applies sanitized Unix permissions to an extracted file or directory.
 #[cfg(unix)]
-pub fn apply_safe_permissions(path: &Path, external_attributes: u32, is_dir: bool) -> std::io::Result<()> {
+pub fn apply_safe_permissions(
+    path: &Path,
+    external_attributes: u32,
+    is_dir: bool,
+) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let safe_mode = sanitize_unix_mode(external_attributes, is_dir);
     let perms = std::fs::Permissions::from_mode(safe_mode);
@@ -53,7 +53,11 @@ pub fn apply_safe_permissions(path: &Path, external_attributes: u32, is_dir: boo
 }
 
 #[cfg(not(unix))]
-pub fn apply_safe_permissions(_path: &Path, _external_attributes: u32, _is_dir: bool) -> std::io::Result<()> {
+pub fn apply_safe_permissions(
+    _path: &Path,
+    _external_attributes: u32,
+    _is_dir: bool,
+) -> std::io::Result<()> {
     Ok(())
 }
 
@@ -80,15 +84,18 @@ mod tests {
         assert_eq!(mode & 0o4000, 0, "SUID bit must be stripped");
         assert_eq!(mode & 0o2000, 0, "SGID bit must be stripped");
         assert_eq!(mode & 0o1000, 0, "Sticky bit must be stripped");
+        assert_eq!(mode & 0o0020, 0, "Group writable bit must be stripped");
         assert_eq!(mode & 0o0002, 0, "World writable bit must be stripped");
         assert_eq!(mode, 0o755);
     }
 
     #[test]
-    fn test_world_writable_stripped() {
+    fn test_group_and_world_writable_stripped() {
         // Attempt 0o777
         let mode = sanitize_unix_mode(0o777 << 16, false);
-        assert_eq!(mode, 0o775); // 0o777 & !0o002
+        assert_eq!(mode, 0o755); // 0o777 & !0o7022 | 0o600
+        assert_eq!(mode & 0o0020, 0);
+        assert_eq!(mode & 0o0002, 0);
     }
 
     #[test]

@@ -1,12 +1,12 @@
+use anyhow::{bail, Context, Result};
+use crc32fast::Hasher;
+use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
-use anyhow::{bail, Context, Result};
-use crc32fast::Hasher;
-use serde::{Deserialize, Serialize};
 
-use crate::archive::{compute_archive_identity, EntryState, ZipInspector};
+use crate::archive::{compute_archive_identity, EntryState, ZipArchiveInspection, ZipInspector};
 use crate::state::manifest::ExtractionManifest;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,6 +22,9 @@ pub struct ReconciliationSummary {
 pub struct StateTracker {
     pub manifest: ExtractionManifest,
     pub manifest_path: PathBuf,
+    pub manifest_needs_save: bool,
+    dirty_count: usize,
+    last_checkpoint: std::time::Instant,
 }
 
 #[derive(Debug)]
@@ -36,21 +39,26 @@ impl StateTracker {
         Self {
             manifest,
             manifest_path,
+            manifest_needs_save: false,
+            dirty_count: 0,
+            last_checkpoint: std::time::Instant::now(),
         }
     }
 
     /// Loads an existing tracker from a manifest file.
     pub fn load_from_file(manifest_path: &Path) -> Result<Self> {
         let manifest = ExtractionManifest::load(manifest_path)?;
-        Ok(Self {
-            manifest,
-            manifest_path: manifest_path.to_path_buf(),
-        })
+        Ok(Self::new(manifest, manifest_path.to_path_buf()))
     }
 
     /// Verifies that the source archive on disk still matches the cryptographic
     /// identity stored in the manifest.
-    pub fn verify_archive_identity(&self, current_archive_path: &Path) -> Result<()> {
+    /// Verifies that the source archive on disk still matches the cryptographic
+    /// identity stored in the manifest. Returns cached inspection if central directory was read.
+    pub fn verify_archive_identity_with_inspection(
+        &self,
+        current_archive_path: &Path,
+    ) -> Result<Option<ZipArchiveInspection>> {
         let metadata = std::fs::metadata(current_archive_path)
             .with_context(|| format!("Failed to read metadata for {:?}", current_archive_path))?;
 
@@ -64,8 +72,10 @@ impl StateTracker {
 
         // If no entries have been reclaimed yet, the archive must match the exact initial hash.
         if self.manifest.reclaimed_count() == 0 {
-            let current_identity = compute_archive_identity(current_archive_path)
-                .with_context(|| format!("Failed to compute identity for {:?}", current_archive_path))?;
+            let current_identity =
+                compute_archive_identity(current_archive_path).with_context(|| {
+                    format!("Failed to compute identity for {:?}", current_archive_path)
+                })?;
 
             if current_identity != self.manifest.archive.identity {
                 bail!(
@@ -74,7 +84,7 @@ impl StateTracker {
                     current_identity
                 );
             }
-            return Ok(());
+            return Ok(None);
         }
 
         // If entries have already been reclaimed, in-place hole punching has legally altered
@@ -105,15 +115,22 @@ impl StateTracker {
         use std::io::{Seek, SeekFrom};
         let mut file = File::open(current_archive_path)?;
         let mut sig = [0u8; 4];
-        for record in self.manifest.entries.values() {
+        for (name, record) in &self.manifest.entries {
             file.seek(SeekFrom::Start(record.local_header_offset))?;
             file.read_exact(&mut sig)?;
             if u32::from_le_bytes(sig) != 0x04034b50 {
-                bail!("Corrupted local file header for entry: {}", record.name);
+                bail!("Corrupted local file header for entry: {}", name);
             }
         }
 
-        Ok(())
+        Ok(Some(inspection))
+    }
+
+    /// Verifies that the source archive on disk still matches the cryptographic
+    /// identity stored in the manifest.
+    pub fn verify_archive_identity(&self, current_archive_path: &Path) -> Result<()> {
+        self.verify_archive_identity_with_inspection(current_archive_path)
+            .map(|_| ())
     }
 
     pub fn set_entry_extracting(&mut self, name: &str) {
@@ -130,12 +147,63 @@ impl StateTracker {
         }
     }
 
+    /// Atomically records both verified and reclaimed status for an entry (P1-02).
+    /// Batches manifest persistence using checkpoint intervals (P1-01).
+    pub fn set_entry_verified_and_reclaimed(
+        &mut self,
+        name: &str,
+        output_path: PathBuf,
+        reclaimed: bool,
+    ) -> Result<()> {
+        if let Some(record) = self.manifest.entries.get_mut(name) {
+            record.state = if reclaimed {
+                EntryState::Reclaimed
+            } else {
+                EntryState::Verified
+            };
+            record.output_path = Some(output_path);
+            self.touch();
+            self.manifest_needs_save = true;
+            self.dirty_count += 1;
+        }
+        self.save_checkpoint_if_needed(false)?;
+        Ok(())
+    }
+
+    /// Checkpoints the manifest to disk if threshold of entries (100) or time (5s) is reached,
+    /// or if force is true.
+    pub fn save_checkpoint_if_needed(&mut self, force: bool) -> Result<()> {
+        if !self.manifest_needs_save {
+            return Ok(());
+        }
+
+        let should_save = force
+            || self.dirty_count >= 100
+            || self.last_checkpoint.elapsed() >= std::time::Duration::from_secs(5);
+
+        if should_save {
+            self.manifest.save_atomic(&self.manifest_path)?;
+            self.manifest_needs_save = false;
+            self.dirty_count = 0;
+            self.last_checkpoint = std::time::Instant::now();
+        }
+        Ok(())
+    }
+
+    /// Explicitly flushes any pending manifest changes to disk.
+    pub fn flush(&mut self) -> Result<()> {
+        self.save_checkpoint_if_needed(true)
+    }
+
     pub fn set_entry_verified(&mut self, name: &str, output_path: PathBuf) -> Result<()> {
         if let Some(record) = self.manifest.entries.get_mut(name) {
             record.state = EntryState::Verified;
             record.output_path = Some(output_path);
             self.touch();
+            self.manifest_needs_save = true;
             self.manifest.save_atomic(&self.manifest_path)?;
+            self.manifest_needs_save = false;
+            self.dirty_count = 0;
         }
         Ok(())
     }
@@ -144,7 +212,10 @@ impl StateTracker {
         if let Some(record) = self.manifest.entries.get_mut(name) {
             record.state = EntryState::Reclaimed;
             self.touch();
+            self.manifest_needs_save = true;
             self.manifest.save_atomic(&self.manifest_path)?;
+            self.manifest_needs_save = false;
+            self.dirty_count = 0;
         }
         Ok(())
     }
@@ -154,8 +225,10 @@ impl StateTracker {
             record.state = EntryState::Skipped;
             record.output_path = Some(output_path);
             self.touch();
-            self.manifest.save_atomic(&self.manifest_path)?;
+            self.manifest_needs_save = true;
+            self.dirty_count += 1;
         }
+        self.save_checkpoint_if_needed(false)?;
         Ok(())
     }
 
@@ -163,7 +236,10 @@ impl StateTracker {
         if let Some(record) = self.manifest.entries.get_mut(name) {
             record.state = EntryState::Failed(reason);
             self.touch();
+            self.manifest_needs_save = true;
             self.manifest.save_atomic(&self.manifest_path)?;
+            self.manifest_needs_save = false;
+            self.dirty_count = 0;
         }
         Ok(())
     }
@@ -179,7 +255,7 @@ impl StateTracker {
     pub fn verify_extracted_output(&self) -> Vec<VerificationFailure> {
         let mut failures = Vec::new();
 
-        for record in self.manifest.entries.values() {
+        for (name, record) in &self.manifest.entries {
             if !matches!(record.state, EntryState::Verified | EntryState::Reclaimed) {
                 continue;
             }
@@ -188,9 +264,10 @@ impl StateTracker {
                 Some(p) => p,
                 None => {
                     failures.push(VerificationFailure {
-                        entry_name: record.name.clone(),
+                        entry_name: name.clone(),
                         path: PathBuf::new(),
-                        reason: "Manifest marked entry as verified but output_path is missing".to_string(),
+                        reason: "Manifest marked entry as verified but output_path is missing"
+                            .to_string(),
                     });
                     continue;
                 }
@@ -199,7 +276,7 @@ impl StateTracker {
             if record.is_dir {
                 if !output_path.is_dir() {
                     failures.push(VerificationFailure {
-                        entry_name: record.name.clone(),
+                        entry_name: name.clone(),
                         path: output_path.clone(),
                         reason: "Directory does not exist on disk".to_string(),
                     });
@@ -209,7 +286,7 @@ impl StateTracker {
 
             if !output_path.is_file() {
                 failures.push(VerificationFailure {
-                    entry_name: record.name.clone(),
+                    entry_name: name.clone(),
                     path: output_path.clone(),
                     reason: "File does not exist on disk".to_string(),
                 });
@@ -220,7 +297,7 @@ impl StateTracker {
             match File::open(output_path) {
                 Err(e) => {
                     failures.push(VerificationFailure {
-                        entry_name: record.name.clone(),
+                        entry_name: name.clone(),
                         path: output_path.clone(),
                         reason: format!("Failed to open file: {}", e),
                     });
@@ -241,7 +318,7 @@ impl StateTracker {
                             }
                             Err(e) => {
                                 failures.push(VerificationFailure {
-                                    entry_name: record.name.clone(),
+                                    entry_name: name.clone(),
                                     path: output_path.clone(),
                                     reason: format!("I/O read error during verification: {}", e),
                                 });
@@ -257,7 +334,7 @@ impl StateTracker {
 
                     if total_bytes != record.uncompressed_size {
                         failures.push(VerificationFailure {
-                            entry_name: record.name.clone(),
+                            entry_name: name.clone(),
                             path: output_path.clone(),
                             reason: format!(
                                 "File size mismatch (disk: {} B, expected: {} B)",
@@ -270,7 +347,7 @@ impl StateTracker {
                     let computed_crc = hasher.finalize();
                     if computed_crc != record.crc32 {
                         failures.push(VerificationFailure {
-                            entry_name: record.name.clone(),
+                            entry_name: name.clone(),
                             path: output_path.clone(),
                             reason: format!(
                                 "CRC-32 mismatch (disk: 0x{:08X}, expected: 0x{:08X})",
@@ -311,11 +388,11 @@ impl StateTracker {
 
         // 2. Reconcile entries against actual filesystem state
         let dest = self.manifest.destination.clone();
-        for record in self.manifest.entries.values_mut() {
+        for (name, record) in &mut self.manifest.entries {
             let expected_path = record
                 .output_path
                 .clone()
-                .unwrap_or_else(|| dest.join(&record.name));
+                .unwrap_or_else(|| dest.join(name));
 
             match &record.state {
                 EntryState::Extracting | EntryState::Extracted => {
@@ -331,7 +408,11 @@ impl StateTracker {
                             summary.interrupted_entries_reset += 1;
                         }
                     } else if expected_path.is_file() {
-                        match verify_single_file(&expected_path, record.uncompressed_size, record.crc32) {
+                        match verify_single_file(
+                            &expected_path,
+                            record.uncompressed_size,
+                            record.crc32,
+                        ) {
                             Ok(true) => {
                                 record.state = EntryState::Verified;
                                 record.output_path = Some(expected_path);
@@ -362,7 +443,11 @@ impl StateTracker {
                         record.output_path = None;
                         summary.missing_verified_reset += 1;
                     } else if verify_existing && !record.is_dir {
-                        match verify_single_file(&expected_path, record.uncompressed_size, record.crc32) {
+                        match verify_single_file(
+                            &expected_path,
+                            record.uncompressed_size,
+                            record.crc32,
+                        ) {
                             Ok(true) => {}
                             _ => {
                                 let _ = std::fs::remove_file(&expected_path);
@@ -390,7 +475,11 @@ impl StateTracker {
                             summary.recovered_verified_entries += 1;
                         }
                     } else if expected_path.is_file() {
-                        if let Ok(true) = verify_single_file(&expected_path, record.uncompressed_size, record.crc32) {
+                        if let Ok(true) = verify_single_file(
+                            &expected_path,
+                            record.uncompressed_size,
+                            record.crc32,
+                        ) {
                             record.state = EntryState::Verified;
                             record.output_path = Some(expected_path);
                             summary.recovered_verified_entries += 1;

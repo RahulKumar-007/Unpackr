@@ -49,7 +49,11 @@ fn test_manifest_creation_and_state_lifecycle() {
 
     // 3. Verify integrity check passes
     let failures = tracker.verify_extracted_output();
-    assert!(failures.is_empty(), "Expected 0 integrity failures, got: {:?}", failures);
+    assert!(
+        failures.is_empty(),
+        "Expected 0 integrity failures, got: {:?}",
+        failures
+    );
 }
 
 #[test]
@@ -102,7 +106,8 @@ fn test_archive_identity_tampering_detection() {
     {
         let file = File::create(zip_file.path()).unwrap();
         let mut zip = ZipWriter::new(file);
-        zip.start_file("sample.txt", SimpleFileOptions::default()).unwrap();
+        zip.start_file("sample.txt", SimpleFileOptions::default())
+            .unwrap();
         zip.write_all(b"initial data").unwrap();
         zip.finish().unwrap();
     }
@@ -138,7 +143,7 @@ fn test_archive_identity_tampering_detection() {
 fn test_job_id_generation_and_lookup() {
     let dummy_path = std::path::Path::new("my_archive.zip");
     let job_id = JobId::generate(dummy_path, "1234567890abcdef");
-    assert!(job_id.as_str().starts_with("my_archive_12345678_"));
+    assert_eq!(job_id.as_str(), "my_archive_12345678");
 
     let dest_dir = tempdir().unwrap();
     let archive_path = std::path::Path::new("tests/test_data/valid_sample.zip");
@@ -160,7 +165,10 @@ fn test_job_id_generation_and_lookup() {
     // Find by path
     let found_by_path = find_manifest_file(dest_dir.path().to_str().unwrap());
     assert!(found_by_path.is_some());
-    assert_eq!(found_by_path.unwrap(), dest_dir.path().join(".unpackr/manifest.json"));
+    assert_eq!(
+        found_by_path.unwrap(),
+        dest_dir.path().join(".unpackr/manifest.json")
+    );
 
     // Find by direct manifest path
     let direct_manifest = dest_dir.path().join(".unpackr/manifest.json");
@@ -203,8 +211,8 @@ fn test_cli_status_and_verify_commands() {
         .output()
         .expect("Failed to execute unpackr status --json");
     assert!(status_json_output.status.success());
-    let parsed_json: serde_json::Value = serde_json::from_slice(&status_json_output.stdout)
-        .expect("Failed to parse status JSON");
+    let parsed_json: serde_json::Value =
+        serde_json::from_slice(&status_json_output.stdout).expect("Failed to parse status JSON");
     assert_eq!(parsed_json["version"], 1);
 
     // 4. Run verify via CLI (should pass)

@@ -12,33 +12,15 @@ use zip::ZipWriter;
 fn bench_inward_reclaim_calculation(c: &mut Criterion) {
     let mut group = c.benchmark_group("reclaim_math");
     group.bench_function("compute_inward_reclaim_range_aligned", |b| {
-        b.iter(|| {
-            compute_inward_reclaim_range(
-                black_box(4096),
-                black_box(16384),
-                black_box(4096),
-            )
-        })
+        b.iter(|| compute_inward_reclaim_range(black_box(4096), black_box(16384), black_box(4096)))
     });
 
     group.bench_function("compute_inward_reclaim_range_unaligned", |b| {
-        b.iter(|| {
-            compute_inward_reclaim_range(
-                black_box(1234),
-                black_box(65536),
-                black_box(4096),
-            )
-        })
+        b.iter(|| compute_inward_reclaim_range(black_box(1234), black_box(65536), black_box(4096)))
     });
 
     group.bench_function("compute_inward_reclaim_range_sub_block", |b| {
-        b.iter(|| {
-            compute_inward_reclaim_range(
-                black_box(500),
-                black_box(2000),
-                black_box(4096),
-            )
-        })
+        b.iter(|| compute_inward_reclaim_range(black_box(500), black_box(2000), black_box(4096)))
     });
     group.finish();
 }
@@ -53,12 +35,7 @@ fn bench_path_sanitization(c: &mut Criterion) {
 
     let sanitized = std::path::Path::new("a/b/c/d/e/f/g/h/resource.dat");
     group.bench_function("resolve_safe_dest", |b| {
-        b.iter(|| {
-            unpackr::security::resolve_safe_dest(
-                black_box(base),
-                black_box(sanitized),
-            )
-        })
+        b.iter(|| unpackr::security::resolve_safe_dest(black_box(base), black_box(sanitized)))
     });
     group.finish();
 }
@@ -100,7 +77,8 @@ fn bench_archive_identity(c: &mut Criterion) {
     {
         let file = File::create(&archive_path).unwrap();
         let mut zip = ZipWriter::new(file);
-        zip.start_file("test.dat", SimpleFileOptions::default()).unwrap();
+        zip.start_file("test.dat", SimpleFileOptions::default())
+            .unwrap();
         let payload = vec![0xAA; 1024 * 1024];
         zip.write_all(&payload).unwrap();
         zip.finish().unwrap();

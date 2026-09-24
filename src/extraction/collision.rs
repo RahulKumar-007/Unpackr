@@ -1,7 +1,8 @@
-use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
 pub enum CollisionPolicy {
     /// Abort extraction with an error if the destination file exists (conservative default)
     #[default]
@@ -14,14 +15,26 @@ pub enum CollisionPolicy {
     Rename,
 }
 
+impl std::str::FromStr for CollisionPolicy {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "fail" => Ok(CollisionPolicy::Fail),
+            "overwrite" => Ok(CollisionPolicy::Overwrite),
+            "skip" => Ok(CollisionPolicy::Skip),
+            "rename" => Ok(CollisionPolicy::Rename),
+            other => Err(format!(
+                "Invalid collision policy '{}'. Expected 'fail', 'skip', 'overwrite', or 'rename'.",
+                other
+            )),
+        }
+    }
+}
+
 impl CollisionPolicy {
     pub fn from_str_lossy(s: &str) -> Self {
-        match s.to_ascii_lowercase().as_str() {
-            "overwrite" => CollisionPolicy::Overwrite,
-            "skip" => CollisionPolicy::Skip,
-            "rename" => CollisionPolicy::Rename,
-            _ => CollisionPolicy::Fail,
-        }
+        s.parse().unwrap_or(CollisionPolicy::Fail)
     }
 
     /// Resolves an available target path according to the collision policy.
@@ -44,9 +57,7 @@ impl CollisionPolicy {
                     .file_stem()
                     .and_then(|s| s.to_str())
                     .unwrap_or("file");
-                let extension = target_path
-                    .extension()
-                    .and_then(|e| e.to_str());
+                let extension = target_path.extension().and_then(|e| e.to_str());
 
                 for i in 1..=10000 {
                     let new_name = match extension {
@@ -90,7 +101,10 @@ mod tests {
         );
 
         // Rename
-        let renamed = CollisionPolicy::Rename.resolve_collision(path).unwrap().unwrap();
+        let renamed = CollisionPolicy::Rename
+            .resolve_collision(path)
+            .unwrap()
+            .unwrap();
         assert_ne!(renamed, path.to_path_buf());
         assert!(!renamed.exists());
     }

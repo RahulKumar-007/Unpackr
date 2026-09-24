@@ -1,11 +1,14 @@
-use anyhow::{bail, Result};
 use crate::state::job::find_manifest_file;
 use crate::state::tracker::StateTracker;
+use anyhow::{bail, Result};
 
 pub fn run_verify(job_id_or_path: &str, json: bool) -> Result<()> {
     let manifest_path = match find_manifest_file(job_id_or_path) {
         Some(p) => p,
-        None => bail!("Could not find manifest for job or path: '{}'", job_id_or_path),
+        None => bail!(
+            "Could not find manifest for job or path: '{}'",
+            job_id_or_path
+        ),
     };
 
     let tracker = StateTracker::load_from_file(&manifest_path)?;
@@ -39,7 +42,10 @@ pub fn run_verify(job_id_or_path: &str, json: bool) -> Result<()> {
         });
         println!("{}", serde_json::to_string_pretty(&res)?);
         if !failures.is_empty() {
-            bail!("Integrity check failed with {} mismatch(es)", failures.len());
+            bail!(
+                "Integrity check failed with {} mismatch(es)",
+                failures.len()
+            );
         }
         return Ok(());
     }
@@ -48,22 +54,37 @@ pub fn run_verify(job_id_or_path: &str, json: bool) -> Result<()> {
     println!("                         UNPACKR DESTINATION VERIFICATION                       ");
     println!("================================================================================");
     println!("Job ID:               {}", tracker.manifest.job_id);
-    println!("Destination:          {}", tracker.manifest.destination.display());
+    println!(
+        "Destination:          {}",
+        tracker.manifest.destination.display()
+    );
     println!("{}", archive_status);
     println!("Checked Entries:      {}", verified_entries_count);
     println!("--------------------------------------------------------------------------------");
 
     if failures.is_empty() {
         println!("Integrity Status:     PASS (All files byte-verified against archive CRC-32)");
-        println!("================================================================================");
+        println!(
+            "================================================================================"
+        );
         Ok(())
     } else {
-        println!("Integrity Status:     FAIL ({} integrity violation(s) detected!)", failures.len());
-        println!("--------------------------------------------------------------------------------");
+        println!(
+            "Integrity Status:     FAIL ({} integrity violation(s) detected!)",
+            failures.len()
+        );
+        println!(
+            "--------------------------------------------------------------------------------"
+        );
         for f in &failures {
             println!("  FAIL: {} ({:?}) - {}", f.entry_name, f.path, f.reason);
         }
-        println!("================================================================================");
-        bail!("Integrity verification failed for {} file(s)", failures.len());
+        println!(
+            "================================================================================"
+        );
+        bail!(
+            "Integrity verification failed for {} file(s)",
+            failures.len()
+        );
     }
 }

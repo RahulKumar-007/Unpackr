@@ -15,7 +15,8 @@ fn create_benchmark_archive(path: &Path, num_entries: usize, entry_size: usize) 
 
     for i in 0..num_entries {
         let name = format!("bench_file_{:03}.dat", i);
-        let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        let options =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
         zip.start_file(&name, options).unwrap();
 
         // Generate distinct pseudo-random patterned content per entry
@@ -84,12 +85,24 @@ fn test_benchmark_peak_storage_reclamation_vs_standard() {
         .expect("Reclaim extraction failed");
 
     // 3. Verify Footprint Reduction
-    println!("Standard Peak Footprint:  {} bytes", summary_std.peak_disk_footprint_bytes);
-    println!("Reclaim Peak Footprint:   {} bytes", summary_rec.peak_disk_footprint_bytes);
+    println!(
+        "Standard Peak Footprint:  {} bytes",
+        summary_std.peak_disk_footprint_bytes
+    );
+    println!(
+        "Reclaim Peak Footprint:   {} bytes",
+        summary_rec.peak_disk_footprint_bytes
+    );
     println!("Standard Duration:        {:.2?}", summary_std.duration);
     println!("Reclaim Duration:         {:.2?}", summary_rec.duration);
-    println!("Reclaim Throughput:       {:.2} MB/s", summary_rec.throughput_mb_per_sec);
-    println!("Reclaimed Archive Bytes:  {} bytes", summary_rec.reclaimed_archive_bytes);
+    println!(
+        "Reclaim Throughput:       {:.2} MB/s",
+        summary_rec.throughput_mb_per_sec
+    );
+    println!(
+        "Reclaimed Archive Bytes:  {} bytes",
+        summary_rec.reclaimed_archive_bytes
+    );
 
     // Standard peak must be archive + total extracted (~40 MB)
     assert!(
@@ -192,11 +205,14 @@ fn test_benchmark_interrupted_reclaim_and_resume_peak_storage() {
         ..Default::default()
     };
 
-    let resume_summary = ExtractionEngine::resume(&summary.job_id, &resume_options)
-        .expect("Resume failed");
+    let resume_summary =
+        ExtractionEngine::resume(&summary.job_id, &resume_options).expect("Resume failed");
 
     assert_eq!(resume_summary.extracted_files, 4);
-    assert_eq!(resume_summary.total_uncompressed_bytes, (num_entries * entry_size) as u64);
+    assert_eq!(
+        resume_summary.total_uncompressed_bytes,
+        (num_entries * entry_size) as u64
+    );
     assert!(resume_summary.peak_disk_footprint_bytes > 0);
 
     // Verify all files match

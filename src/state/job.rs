@@ -1,5 +1,4 @@
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JobId(pub String);
@@ -22,12 +21,7 @@ impl JobId {
             "00000000"
         };
 
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-
-        JobId(format!("{}_{}_{}", stem, short_id, timestamp))
+        JobId(format!("{}_{}", stem, short_id))
     }
 
     pub fn as_str(&self) -> &str {
@@ -67,15 +61,21 @@ pub fn find_manifest_file(job_id_or_path: &str) -> Option<PathBuf> {
 
     // 3. Global job directory `~/.unpackr/jobs/<job-id>/manifest.json`
     if let Some(global_dir) = global_jobs_dir() {
-        let global_manifest = global_dir.join(job_id_or_path).join("manifest.json");
-        if global_manifest.is_file() {
-            if let Ok(manifest) = ExtractionManifest::load(&global_manifest) {
-                let dest_manifest = manifest.destination.join(".unpackr").join("manifest.json");
-                if dest_manifest.is_file() {
-                    return Some(dest_manifest);
+        let is_safe_slug = !job_id_or_path.is_empty()
+            && job_id_or_path
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '-' || c == '_');
+        if is_safe_slug {
+            let global_manifest = global_dir.join(job_id_or_path).join("manifest.json");
+            if global_manifest.is_file() {
+                if let Ok(manifest) = ExtractionManifest::load(&global_manifest) {
+                    let dest_manifest = manifest.destination.join(".unpackr").join("manifest.json");
+                    if dest_manifest.is_file() {
+                        return Some(dest_manifest);
+                    }
                 }
+                return Some(global_manifest);
             }
-            return Some(global_manifest);
         }
     }
 
@@ -103,4 +103,3 @@ pub fn find_manifest_for_job(target: &str, destination: Option<&Path>) -> Option
 
     None
 }
-

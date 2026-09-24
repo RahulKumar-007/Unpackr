@@ -16,19 +16,21 @@ fn test_inspect_stored_and_deflated_entries() {
         let mut zip = ZipWriter::new(file);
 
         // Entry 1: Stored
-        let stored_opts = SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Stored);
+        let stored_opts =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
         zip.start_file("stored.txt", stored_opts).unwrap();
         zip.write_all(b"Hello Stored World!").unwrap();
 
         // Entry 2: Deflated
-        let deflated_opts = SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated);
-        zip.start_file("nested/deflated.txt", deflated_opts).unwrap();
+        let deflated_opts =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        zip.start_file("nested/deflated.txt", deflated_opts)
+            .unwrap();
         zip.write_all(b"A quick brown fox jumps over the lazy dog. A quick brown fox jumps over the lazy dog.").unwrap();
 
         // Entry 3: Directory
-        zip.add_directory("nested/subdir/", SimpleFileOptions::default()).unwrap();
+        zip.add_directory("nested/subdir/", SimpleFileOptions::default())
+            .unwrap();
 
         zip.finish().unwrap();
     }
@@ -74,7 +76,9 @@ fn test_inspect_stored_and_deflated_entries() {
 #[test]
 fn test_inspect_corrupt_file() {
     let mut tmp_file = NamedTempFile::new().unwrap();
-    tmp_file.write_all(b"corrupt non-zip data of arbitrary bytes").unwrap();
+    tmp_file
+        .write_all(b"corrupt non-zip data of arbitrary bytes")
+        .unwrap();
     tmp_file.flush().unwrap();
 
     let result = ZipInspector::inspect(tmp_file.path());
@@ -91,7 +95,8 @@ fn test_archive_identity_consistency() {
     {
         let file = File::create(&path).unwrap();
         let mut zip = ZipWriter::new(file);
-        zip.start_file("sample.txt", SimpleFileOptions::default()).unwrap();
+        zip.start_file("sample.txt", SimpleFileOptions::default())
+            .unwrap();
         zip.write_all(b"constant content").unwrap();
         zip.finish().unwrap();
     }
@@ -116,3 +121,90 @@ fn test_inspect_zip_slip_sample() {
     }
 }
 
+#[test]
+fn test_inspect_zip64_archive() {
+    let tmp_file = NamedTempFile::new().unwrap();
+    let path = tmp_file.path().to_path_buf();
+
+    let mut data = Vec::new();
+    // 1. Local File Header
+    let lfh_offset = data.len() as u64;
+    data.extend_from_slice(&0x04034b50u32.to_le_bytes());
+    data.extend_from_slice(&45u16.to_le_bytes());
+    data.extend_from_slice(&0u16.to_le_bytes());
+    data.extend_from_slice(&0u16.to_le_bytes());
+    data.extend_from_slice(&0u16.to_le_bytes());
+    data.extend_from_slice(&0u16.to_le_bytes());
+    let payload = b"ZIP64 payload test content";
+    let crc = crc32fast::hash(payload);
+    data.extend_from_slice(&crc.to_le_bytes());
+    data.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    data.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    let filename = b"zip64_test.txt";
+    data.extend_from_slice(&(filename.len() as u16).to_le_bytes());
+    data.extend_from_slice(&0u16.to_le_bytes());
+    data.extend_from_slice(filename);
+    data.extend_from_slice(payload);
+
+    // 2. Central Directory Header
+    let cd_offset = data.len() as u64;
+    data.extend_from_slice(&0x02014b50u32.to_le_bytes());
+    data.extend_from_slice(&45u16.to_le_bytes());
+    data.extend_from_slice(&45u16.to_le_bytes());
+    data.extend_from_slice(&0u16.to_le_bytes());
+    data.extend_from_slice(&0u16.to_le_bytes());
+    data.extend_from_slice(&0u16.to_le_bytes());
+    data.extend_from_slice(&0u16.to_le_bytes());
+    data.extend_from_slice(&crc.to_le_bytes());
+    data.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    data.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    data.extend_from_slice(&(filename.len() as u16).to_le_bytes());
+    data.extend_from_slice(&0u16.to_le_bytes());
+    data.extend_from_slice(&0u16.to_le_bytes());
+    data.extend_from_slice(&0u16.to_le_bytes());
+    data.extend_from_slice(&0u16.to_le_bytes());
+    data.extend_from_slice(&0o100644u32.to_le_bytes());
+    data.extend_from_slice(&(lfh_offset as u32).to_le_bytes());
+    data.extend_from_slice(filename);
+    let cd_size = (data.len() as u64) - cd_offset;
+
+    // 3. ZIP64 End of Central Directory Record (56 bytes)
+    let zip64_eocd_offset = data.len() as u64;
+    data.extend_from_slice(&0x06064b50u32.to_le_bytes());
+    data.extend_from_slice(&44u64.to_le_bytes());
+    data.extend_from_slice(&45u16.to_le_bytes());
+    data.extend_from_slice(&45u16.to_le_bytes());
+    data.extend_from_slice(&0u32.to_le_bytes());
+    data.extend_from_slice(&0u32.to_le_bytes());
+    data.extend_from_slice(&1u64.to_le_bytes());
+    data.extend_from_slice(&1u64.to_le_bytes());
+    data.extend_from_slice(&cd_size.to_le_bytes());
+    data.extend_from_slice(&cd_offset.to_le_bytes());
+
+    // 4. ZIP64 End of Central Directory Locator (20 bytes)
+    data.extend_from_slice(&0x07064b50u32.to_le_bytes());
+    data.extend_from_slice(&0u32.to_le_bytes());
+    data.extend_from_slice(&zip64_eocd_offset.to_le_bytes());
+    data.extend_from_slice(&1u32.to_le_bytes());
+
+    // 5. Standard EOCD (22 bytes)
+    data.extend_from_slice(&0x06054b50u32.to_le_bytes());
+    data.extend_from_slice(&0u16.to_le_bytes());
+    data.extend_from_slice(&0u16.to_le_bytes());
+    data.extend_from_slice(&0xFFFFu16.to_le_bytes());
+    data.extend_from_slice(&0xFFFFu16.to_le_bytes());
+    data.extend_from_slice(&0xFFFFFFFFu32.to_le_bytes());
+    data.extend_from_slice(&0xFFFFFFFFu32.to_le_bytes());
+    data.extend_from_slice(&0u16.to_le_bytes());
+
+    std::fs::write(&path, &data).unwrap();
+
+    let inspection = ZipInspector::inspect(&path).expect("Failed to inspect zip64 archive");
+    assert!(inspection.is_zip64);
+    assert_eq!(inspection.total_entries, 1);
+    assert_eq!(inspection.entries[0].name, "zip64_test.txt");
+    assert_eq!(
+        inspection.entries[0].uncompressed_size,
+        payload.len() as u64
+    );
+}

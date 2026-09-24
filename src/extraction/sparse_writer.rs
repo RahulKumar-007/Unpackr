@@ -10,7 +10,6 @@ pub struct SparseWriter {
     enable_sparse: bool,
     buffer: Vec<u8>,
     sparse_bytes_saved: u64,
-    total_bytes_written: u64,
 }
 
 impl SparseWriter {
@@ -20,17 +19,14 @@ impl SparseWriter {
             enable_sparse,
             buffer: Vec::with_capacity(BLOCK_SIZE),
             sparse_bytes_saved: 0,
-            total_bytes_written: 0,
         }
     }
 
-    /// Fast check if a 4096-byte slice is completely zeroes
+    /// Fast safe SWAR check if a 4096-byte slice is completely zeroes
     #[inline]
     fn is_all_zero(slice: &[u8]) -> bool {
-        let (prefix, words, suffix) = unsafe { slice.align_to::<u64>() };
-        prefix.iter().all(|&b| b == 0)
-            && words.iter().all(|&w| w == 0)
-            && suffix.iter().all(|&b| b == 0)
+        let (chunks, remainder) = slice.as_chunks::<8>();
+        chunks.iter().all(|c| u64::from_ne_bytes(*c) == 0) && remainder.iter().all(|&b| b == 0)
     }
 
     pub fn write_chunk(&mut self, data: &[u8]) -> Result<()> {
@@ -43,7 +39,8 @@ impl SparseWriter {
             let available = len - offset;
             let to_copy = needed.min(available);
 
-            self.buffer.extend_from_slice(&data[offset..offset + to_copy]);
+            self.buffer
+                .extend_from_slice(&data[offset..offset + to_copy]);
             offset += to_copy;
 
             if self.buffer.len() == BLOCK_SIZE {
@@ -51,7 +48,6 @@ impl SparseWriter {
             }
         }
 
-        self.total_bytes_written += len as u64;
         Ok(())
     }
 
@@ -60,7 +56,8 @@ impl SparseWriter {
             return Ok(());
         }
 
-        if self.enable_sparse && self.buffer.len() == BLOCK_SIZE && Self::is_all_zero(&self.buffer) {
+        if self.enable_sparse && self.buffer.len() == BLOCK_SIZE && Self::is_all_zero(&self.buffer)
+        {
             // Advance seek position without writing physical data blocks
             self.file.seek(SeekFrom::Current(BLOCK_SIZE as i64))?;
             self.sparse_bytes_saved += BLOCK_SIZE as u64;
@@ -93,6 +90,18 @@ impl SparseWriter {
     }
 }
 
+#[cfg(debug_assertions)]
+impl Drop for SparseWriter {
+    fn drop(&mut self) {
+        if !self.buffer.is_empty() && !std::thread::panicking() {
+            eprintln!(
+                "Warning: SparseWriter dropped with {} unflushed bytes in buffer",
+                self.buffer.len()
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -113,6 +122,7 @@ mod tests {
         data.extend_from_slice(&[0x42; 4096]);
 
         writer.write_chunk(&data).unwrap();
+        assert_eq!(writer.sparse_bytes_saved(), 8192);
         let saved = writer.finish(data.len() as u64).unwrap();
 
         assert_eq!(saved, 8192);

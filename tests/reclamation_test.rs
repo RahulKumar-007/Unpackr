@@ -16,7 +16,8 @@ fn create_large_archive(path: &std::path::Path, num_entries: usize, entry_size: 
     for i in 0..num_entries {
         let name = format!("entry_{:02}.dat", i);
         // Use Stored method to guarantee known uncompressed and compressed sizes without flate2 variability
-        let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        let options =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
         zip.start_file(&name, options).unwrap();
 
         // Write non-zero pseudo-data so the OS allocates real physical blocks
@@ -60,7 +61,10 @@ fn test_physical_disk_space_reclamation() {
 
     let initial_physical_bytes = get_physical_allocated_bytes(&archive_path)
         .expect("Failed to get initial physical allocation");
-    assert!(initial_physical_bytes >= 512 * 1024, "Archive should have physical blocks allocated");
+    assert!(
+        initial_physical_bytes >= 512 * 1024,
+        "Archive should have physical blocks allocated"
+    );
 
     let options = ExtractionOptions {
         destination: dest_dir.path().to_path_buf(),
@@ -74,10 +78,15 @@ fn test_physical_disk_space_reclamation() {
         ..Default::default()
     };
 
-    let summary = ExtractionEngine::extract(&archive_path, &options).expect("Extraction with reclamation failed");
+    let summary = ExtractionEngine::extract(&archive_path, &options)
+        .expect("Extraction with reclamation failed");
 
     // 1. Verify reclaimed bytes recorded
-    assert!(summary.reclaimed_archive_bytes > 0, "Expected reclaimed archive bytes > 0, got {}", summary.reclaimed_archive_bytes);
+    assert!(
+        summary.reclaimed_archive_bytes > 0,
+        "Expected reclaimed archive bytes > 0, got {}",
+        summary.reclaimed_archive_bytes
+    );
     assert_eq!(summary.extracted_files, 4);
 
     // 2. Query physical allocated blocks on the archive file
@@ -104,10 +113,15 @@ fn test_physical_disk_space_reclamation() {
 
     // 4. Verify all extracted files in destination are complete and valid
     let failures = tracker.verify_extracted_output();
-    assert!(failures.is_empty(), "Extracted files corrupted: {:?}", failures);
+    assert!(
+        failures.is_empty(),
+        "Extracted files corrupted: {:?}",
+        failures
+    );
 
     // 5. Verify Central Directory and Local File Headers remain intact and parseable
-    let inspection = ZipInspector::inspect(&archive_path).expect("Archive Central Directory must remain parseable after hole punching");
+    let inspection = ZipInspector::inspect(&archive_path)
+        .expect("Archive Central Directory must remain parseable after hole punching");
     assert_eq!(inspection.total_entries, 4);
 
     // Read local file header of entry 0 from archive file to verify signature 0x04034b50 is intact
@@ -115,7 +129,10 @@ fn test_physical_disk_space_reclamation() {
     let mut sig_buf = [0u8; 4];
     file.read_exact(&mut sig_buf).unwrap();
     let sig = u32::from_le_bytes(sig_buf);
-    assert_eq!(sig, 0x04034b50, "Local file header magic signature was destroyed!");
+    assert_eq!(
+        sig, 0x04034b50,
+        "Local file header magic signature was destroyed!"
+    );
 }
 
 #[test]
@@ -147,12 +164,16 @@ fn test_default_mode_does_not_modify_read_only_archive() {
         ..Default::default()
     };
 
-    let summary = ExtractionEngine::extract(&archive_path, &options).expect("Read-only extraction failed");
+    let summary =
+        ExtractionEngine::extract(&archive_path, &options).expect("Read-only extraction failed");
     assert_eq!(summary.reclaimed_archive_bytes, 0);
 
     // Verify archive was NOT modified in any way
     let current_data = fs::read(&archive_path).unwrap();
-    assert_eq!(initial_data, current_data, "Read-only archive bytes were modified!");
+    assert_eq!(
+        initial_data, current_data,
+        "Read-only archive bytes were modified!"
+    );
 
     let current_physical = get_physical_allocated_bytes(&archive_path).unwrap();
     assert_eq!(initial_physical, current_physical);

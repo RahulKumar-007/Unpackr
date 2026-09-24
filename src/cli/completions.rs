@@ -1,6 +1,6 @@
+use crate::cli::Cli;
 use clap::CommandFactory;
 use clap_complete::{generate, Shell};
-use crate::cli::Cli;
 
 /// Generates shell completion scripts to stdout for the specified shell.
 pub fn run_completions(shell: Shell) {

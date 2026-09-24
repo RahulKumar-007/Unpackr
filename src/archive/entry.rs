@@ -18,9 +18,9 @@ impl CompressionMethod {
 
     pub fn as_str(&self) -> &'static str {
         match self {
-            CompressionMethod::Stored => "Stored (no compression)",
+            CompressionMethod::Stored => "Stored",
             CompressionMethod::Deflated => "Deflate",
-            CompressionMethod::Unsupported(_) => "Unsupported",
+            CompressionMethod::Unsupported(_) => "Unknown",
         }
     }
 }

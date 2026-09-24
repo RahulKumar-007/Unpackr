@@ -6,8 +6,8 @@ pub mod resume;
 pub mod status;
 pub mod verify;
 
-use std::path::PathBuf;
 use clap::{Parser, Subcommand};
+use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -57,8 +57,8 @@ pub enum Commands {
         destination: PathBuf,
 
         /// Collision policy if destination files exist: fail, skip, overwrite, rename (default: fail)
-        #[arg(long, default_value = "fail")]
-        collision: String,
+        #[arg(long, default_value = "fail", value_enum)]
+        collision: crate::extraction::CollisionPolicy,
 
         /// Disable sparse file hole detection
         #[arg(long)]
@@ -80,11 +80,11 @@ pub enum Commands {
         #[arg(long)]
         max_file_size: Option<u64>,
 
-        /// Maximum allowed entry count in archive (DoS defense)
+        /// Maximum allowed entry count in archive (DoS defense, default: 100,000)
         #[arg(long)]
         max_entries: Option<usize>,
 
-        /// Custom state directory for crash recovery journals
+        /// Custom state directory for crash recovery journals (default: <destination>/.unpackr/)
         #[arg(long)]
         state_dir: Option<PathBuf>,
 
@@ -115,8 +115,8 @@ pub enum Commands {
         verify: bool,
 
         /// Collision policy: fail, skip, overwrite, rename
-        #[arg(long)]
-        collision: Option<String>,
+        #[arg(long, value_enum)]
+        collision: Option<crate::extraction::CollisionPolicy>,
 
         /// Reclaim archive storage in-place during resume
         #[arg(long)]

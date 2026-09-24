@@ -1,10 +1,10 @@
+use anyhow::{bail, Context, Result};
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
-use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
 
 use crate::archive::{EntryState, ZipArchiveInspection};
 
@@ -21,7 +21,6 @@ pub struct ArchiveManifestInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntryManifestRecord {
     pub index: usize,
-    pub name: String,
     pub state: EntryState,
     pub compressed_size: u64,
     pub uncompressed_size: u64,
@@ -67,7 +66,6 @@ impl ExtractionManifest {
                 entry.name.clone(),
                 EntryManifestRecord {
                     index: entry.index,
-                    name: entry.name.clone(),
                     state: EntryState::Pending,
                     compressed_size: entry.compressed_size,
                     uncompressed_size: entry.uncompressed_size,
@@ -98,27 +96,34 @@ impl ExtractionManifest {
 
     /// Loads and parses a manifest file from disk.
     pub fn load(path: &Path) -> Result<Self> {
-        let file = File::open(path)
-            .with_context(|| format!("Failed to open manifest at {:?}", path))?;
+        let file =
+            File::open(path).with_context(|| format!("Failed to open manifest at {:?}", path))?;
         let reader = BufReader::new(file);
         let manifest: ExtractionManifest = serde_json::from_reader(reader)
             .with_context(|| format!("Failed to parse manifest JSON at {:?}", path))?;
+        if manifest.version != MANIFEST_VERSION {
+            bail!(
+                "Manifest version {} is not supported (expected {})",
+                manifest.version,
+                MANIFEST_VERSION
+            );
+        }
         Ok(manifest)
     }
 
     /// Atomically persists the manifest file to disk using a write-to-temp-then-rename strategy.
     pub fn save_atomic(&self, path: &Path) -> Result<()> {
-        if let Some(parent) = path.parent() {
+        let parent_dir = path.parent();
+        if let Some(parent) = parent_dir {
             fs::create_dir_all(parent)
                 .with_context(|| format!("Failed to create manifest directory {:?}", parent))?;
         }
 
-        let temp_filename = format!(
-            ".manifest_{}_{}.tmp",
-            self.job_id,
-            std::process::id()
-        );
-        let temp_path = path.parent().unwrap_or_else(|| Path::new("")).join(temp_filename);
+        let temp_filename = format!(".manifest_{}_{}.tmp", self.job_id, std::process::id());
+        let temp_path = path
+            .parent()
+            .unwrap_or_else(|| Path::new(""))
+            .join(temp_filename);
 
         {
             let temp_file = OpenOptions::new()
@@ -126,7 +131,9 @@ impl ExtractionManifest {
                 .create(true)
                 .truncate(true)
                 .open(&temp_path)
-                .with_context(|| format!("Failed to create temporary manifest at {:?}", temp_path))?;
+                .with_context(|| {
+                    format!("Failed to create temporary manifest at {:?}", temp_path)
+                })?;
             let mut writer = BufWriter::new(temp_file);
             serde_json::to_writer_pretty(&mut writer, self)
                 .with_context(|| "Failed to serialize manifest JSON")?;
@@ -135,38 +142,69 @@ impl ExtractionManifest {
             inner_file.sync_all()?;
         }
 
-        fs::rename(&temp_path, path)
-            .with_context(|| format!("Failed to atomically rename manifest from {:?} to {:?}", temp_path, path))?;
+        fs::rename(&temp_path, path).with_context(|| {
+            format!(
+                "Failed to atomically rename manifest from {:?} to {:?}",
+                temp_path, path
+            )
+        })?;
+
+        if let Some(parent) = parent_dir {
+            if let Ok(dir_file) = File::open(parent) {
+                let _ = dir_file.sync_all();
+            }
+        }
 
         Ok(())
     }
 
     pub fn verified_count(&self) -> usize {
-        self.entries.values().filter(|e| matches!(e.state, EntryState::Verified | EntryState::Reclaimed)).count()
+        self.entries
+            .values()
+            .filter(|e| matches!(e.state, EntryState::Verified | EntryState::Reclaimed))
+            .count()
     }
 
     pub fn failed_count(&self) -> usize {
-        self.entries.values().filter(|e| matches!(e.state, EntryState::Failed(_))).count()
+        self.entries
+            .values()
+            .filter(|e| matches!(e.state, EntryState::Failed(_)))
+            .count()
     }
 
     pub fn pending_count(&self) -> usize {
-        self.entries.values().filter(|e| matches!(e.state, EntryState::Pending)).count()
+        self.entries
+            .values()
+            .filter(|e| matches!(e.state, EntryState::Pending))
+            .count()
     }
 
     pub fn extracting_count(&self) -> usize {
-        self.entries.values().filter(|e| matches!(e.state, EntryState::Extracting)).count()
+        self.entries
+            .values()
+            .filter(|e| matches!(e.state, EntryState::Extracting))
+            .count()
     }
 
     pub fn extracted_count(&self) -> usize {
-        self.entries.values().filter(|e| matches!(e.state, EntryState::Extracted)).count()
+        self.entries
+            .values()
+            .filter(|e| matches!(e.state, EntryState::Extracted))
+            .count()
     }
 
     pub fn reclaimed_count(&self) -> usize {
-        self.entries.values().filter(|e| matches!(e.state, EntryState::Reclaimed)).count()
+        self.entries
+            .values()
+            .filter(|e| matches!(e.state, EntryState::Reclaimed))
+            .count()
     }
 
     pub fn skipped_count(&self) -> usize {
-        self.entries.values().filter(|e| matches!(e.state, EntryState::Skipped)).count()
+        self.entries
+            .values()
+            .filter(|e| matches!(e.state, EntryState::Skipped))
+            .count()
     }
 
     pub fn total_uncompressed_bytes(&self) -> u64 {
@@ -188,7 +226,12 @@ impl ExtractionManifest {
             let completed = self
                 .entries
                 .values()
-                .filter(|e| matches!(e.state, EntryState::Verified | EntryState::Reclaimed | EntryState::Skipped))
+                .filter(|e| {
+                    matches!(
+                        e.state,
+                        EntryState::Verified | EntryState::Reclaimed | EntryState::Skipped
+                    )
+                })
                 .count();
             (completed as f64 / self.entries.len() as f64) * 100.0
         }

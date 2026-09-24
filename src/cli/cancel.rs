@@ -1,12 +1,15 @@
-use std::fs;
-use anyhow::{bail, Result};
 use crate::state::job::find_manifest_file;
 use crate::state::tracker::StateTracker;
+use anyhow::{bail, Result};
+use std::fs;
 
 pub fn run_cancel(job_id_or_path: &str, clean: bool, json: bool) -> Result<()> {
     let manifest_path = match find_manifest_file(job_id_or_path) {
         Some(p) => p,
-        None => bail!("Could not find manifest for job or path: '{}'", job_id_or_path),
+        None => bail!(
+            "Could not find manifest for job or path: '{}'",
+            job_id_or_path
+        ),
     };
 
     let mut tracker = StateTracker::load_from_file(&manifest_path)?;

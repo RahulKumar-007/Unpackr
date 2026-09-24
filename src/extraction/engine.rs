@@ -1,8 +1,8 @@
+use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-use serde::{Deserialize, Serialize};
 
 use crate::archive::{EntryState, ZipInspector};
 use crate::extraction::collision::CollisionPolicy;
@@ -31,6 +31,8 @@ pub struct ExtractionOptions {
     pub max_entries: Option<usize>,
 }
 
+pub const DEFAULT_MAX_ENTRIES: usize = 100_000;
+
 impl Default for ExtractionOptions {
     fn default() -> Self {
         Self {
@@ -44,7 +46,7 @@ impl Default for ExtractionOptions {
             quiet: false,
             max_total_size: None,
             max_file_size: None,
-            max_entries: None,
+            max_entries: Some(DEFAULT_MAX_ENTRIES),
         }
     }
 }
@@ -107,6 +109,313 @@ pub struct ExtractionSummary {
     pub duration: Duration,
 }
 
+struct DestinationLock {
+    _file: File,
+}
+
+impl DestinationLock {
+    fn acquire(dir: &Path) -> Result<Self, ExtractionError> {
+        let _ = std::fs::create_dir_all(dir);
+        let lock_path = dir.join(".lock");
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)
+            .map_err(|e| ExtractionError::Io {
+                entry: lock_path.to_string_lossy().to_string(),
+                source: e,
+            })?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            let ret = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+            if ret != 0 {
+                let err = std::io::Error::last_os_error();
+                if err.raw_os_error() == Some(libc::EWOULDBLOCK)
+                    || err.raw_os_error() == Some(libc::EAGAIN)
+                {
+                    return Err(ExtractionError::Archive(format!(
+                        "Another unpackr process is currently extracting to destination {:?}",
+                        dir
+                    )));
+                }
+            }
+        }
+
+        Ok(Self { _file: file })
+    }
+}
+
+struct ProcessEntriesParams<'a> {
+    archive_path: &'a Path,
+    destination: &'a Path,
+    manifest_path: &'a Path,
+    entries: &'a [crate::archive::ZipEntryMetadata],
+    total_uncompressed_archive_size: u64,
+    collision_policy: CollisionPolicy,
+    enable_sparse: bool,
+    max_compression_ratio: f64,
+    max_file_size: Option<u64>,
+    verbose: bool,
+    quiet: bool,
+    start_time: Instant,
+    initial_archive_phys: u64,
+    already_extracted_bytes: u64,
+    already_reclaimed_bytes: u64,
+}
+
+fn process_entries(
+    mut archive_file: File,
+    mut puncher: Option<ArchiveHolePuncher>,
+    tracker: &mut StateTracker,
+    params: ProcessEntriesParams,
+) -> Result<ExtractionSummary, ExtractionError> {
+    let mut current_extracted_bytes = params.already_extracted_bytes;
+    let mut current_sparse_saved = 0u64;
+    let mut current_reclaimed_bytes = 0u64;
+    let mut peak_disk_footprint = params.initial_archive_phys + params.already_extracted_bytes;
+
+    let mut extracted_files = 0;
+    let mut skipped_files = 0;
+    let mut created_directories = 0;
+    let mut total_uncompressed_bytes = 0u64;
+    let mut sparse_bytes_saved = 0u64;
+    let mut warned_reclamation_unsupported = false;
+
+    for (i, entry) in params.entries.iter().enumerate() {
+        if params.collision_policy != CollisionPolicy::Overwrite
+            && params.collision_policy != CollisionPolicy::Rename
+        {
+            if let Some(record) = tracker.manifest.entries.get(&entry.name) {
+                if matches!(record.state, EntryState::Verified | EntryState::Reclaimed) {
+                    if params.verbose {
+                        println!(
+                            "[{}/{}] (Verified) Skipping: {}",
+                            i + 1,
+                            params.entries.len(),
+                            entry.name
+                        );
+                    }
+                    if !entry.is_dir {
+                        extracted_files += 1;
+                        total_uncompressed_bytes += entry.uncompressed_size;
+                    } else {
+                        created_directories += 1;
+                    }
+                    continue;
+                } else if matches!(record.state, EntryState::Skipped) {
+                    skipped_files += 1;
+                    continue;
+                }
+            }
+        }
+
+        if params.verbose {
+            println!(
+                "[{}/{}] Extracting: {}",
+                i + 1,
+                params.entries.len(),
+                entry.name
+            );
+        }
+
+        // Security check: Single file resource limit
+        if let Some(max_file) = params.max_file_size {
+            if entry.uncompressed_size > max_file {
+                return Err(ExtractionError::ResourceLimitExceeded(format!(
+                    "Entry '{}' uncompressed size is {} bytes, exceeding configured limit of {} bytes",
+                    entry.name, entry.uncompressed_size, max_file
+                )));
+            }
+        }
+
+        // Transition: PENDING -> EXTRACTING
+        tracker.set_entry_extracting(&entry.name);
+
+        let result = EntryWorker::extract_entry(
+            &mut archive_file,
+            entry,
+            params.destination,
+            params.collision_policy,
+            params.enable_sparse,
+            params.max_compression_ratio,
+        );
+
+        match result {
+            Ok(WorkerResult::Extracted {
+                path,
+                uncompressed_bytes,
+                sparse_bytes_saved: sparse_saved,
+            }) => {
+                tracker.set_entry_extracted(&entry.name);
+
+                // If storage reclamation enabled: punch hole in source archive BEFORE committing verified status (P1-02)
+                let mut punched_bytes = 0u64;
+                let mut is_reclaimed = false;
+                if let Some(p) = &mut puncher {
+                    match p.punch_entry(entry) {
+                        Ok(punched) if punched > 0 => {
+                            punched_bytes = punched;
+                            is_reclaimed = true;
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            if matches!(
+                                e,
+                                crate::reclamation::ReclamationError::UnsupportedFilesystem
+                            ) {
+                                if !warned_reclamation_unsupported {
+                                    warned_reclamation_unsupported = true;
+                                    if !params.quiet {
+                                        eprintln!("Warning: filesystem does not support hole punching (FALLOC_FL_PUNCH_HOLE). Archive reclamation is disabled.");
+                                    }
+                                }
+                            } else if params.verbose {
+                                eprintln!(
+                                    "Warning: storage reclamation skipped for '{}': {}",
+                                    entry.name, e
+                                );
+                            }
+                        }
+                    }
+                }
+
+                // Atomically update state in tracker (P1-02, P1-01)
+                tracker
+                    .set_entry_verified_and_reclaimed(&entry.name, path, is_reclaimed)
+                    .map_err(|e| ExtractionError::Archive(e.to_string()))?;
+
+                extracted_files += 1;
+                total_uncompressed_bytes += uncompressed_bytes;
+                sparse_bytes_saved += sparse_saved;
+
+                let footprint_before_punch = params
+                    .initial_archive_phys
+                    .saturating_sub(current_reclaimed_bytes)
+                    + (current_extracted_bytes + uncompressed_bytes)
+                        .saturating_sub(current_sparse_saved + sparse_saved);
+                if footprint_before_punch > peak_disk_footprint {
+                    peak_disk_footprint = footprint_before_punch;
+                }
+
+                current_extracted_bytes += uncompressed_bytes;
+                current_sparse_saved += sparse_saved;
+                current_reclaimed_bytes += punched_bytes;
+
+                if std::io::stderr().is_terminal() && !params.verbose && !params.quiet {
+                    let pct = if params.total_uncompressed_archive_size > 0 {
+                        (current_extracted_bytes as f64
+                            / params.total_uncompressed_archive_size as f64
+                            * 100.0)
+                            .min(100.0)
+                    } else {
+                        (i + 1) as f64 / params.entries.len() as f64 * 100.0
+                    };
+                    let elapsed_secs = params.start_time.elapsed().as_secs_f64();
+                    let mb_s = if elapsed_secs > 0.0 {
+                        ((current_extracted_bytes.saturating_sub(params.already_extracted_bytes))
+                            as f64
+                            / 1_048_576.0)
+                            / elapsed_secs
+                    } else {
+                        0.0
+                    };
+                    let eta_secs = if mb_s > 0.0
+                        && params.total_uncompressed_archive_size > current_extracted_bytes
+                    {
+                        ((params.total_uncompressed_archive_size - current_extracted_bytes) as f64
+                            / 1_048_576.0)
+                            / mb_s
+                    } else {
+                        0.0
+                    };
+                    eprint!(
+                        "\rExtracting: [{}/{}] ({:>5.1}%) - {:.1} MB/s - ETA: {:.0}s - Peak: {}",
+                        i + 1,
+                        params.entries.len(),
+                        pct,
+                        mb_s,
+                        eta_secs,
+                        crate::cli::inspect::format_bytes(peak_disk_footprint)
+                    );
+                    let _ = std::io::stderr().flush();
+                }
+            }
+            Ok(WorkerResult::Directory { path }) => {
+                tracker.set_entry_extracted(&entry.name);
+                tracker
+                    .set_entry_verified_and_reclaimed(&entry.name, path, false)
+                    .map_err(|e| ExtractionError::Archive(e.to_string()))?;
+                created_directories += 1;
+            }
+            Ok(WorkerResult::Skipped { path }) => {
+                tracker
+                    .set_entry_skipped(&entry.name, path)
+                    .map_err(|e| ExtractionError::Archive(e.to_string()))?;
+                skipped_files += 1;
+            }
+            Err(err) => {
+                // Transition: EXTRACTING -> FAILED (P0-04)
+                if let Err(persist_err) = tracker.set_entry_failed(&entry.name, err.to_string()) {
+                    eprintln!(
+                        "Warning: failed to persist FAILED state for '{}': {}",
+                        entry.name, persist_err
+                    );
+                }
+                let _ = tracker.flush();
+                return Err(err);
+            }
+        }
+    }
+
+    if std::io::stderr().is_terminal()
+        && !params.verbose
+        && !params.quiet
+        && !params.entries.is_empty()
+    {
+        eprintln!();
+    }
+
+    // Flush any pending checkpointed writes to disk (P1-01)
+    tracker
+        .flush()
+        .map_err(|e| ExtractionError::Archive(e.to_string()))?;
+
+    let duration = params.start_time.elapsed();
+    let secs = duration.as_secs_f64();
+    let newly_extracted = current_extracted_bytes.saturating_sub(params.already_extracted_bytes);
+    let throughput_mb_per_sec = if secs > 0.0 {
+        (newly_extracted as f64 / 1_048_576.0) / secs
+    } else {
+        0.0
+    };
+    let reclaimed_archive_bytes = params.already_reclaimed_bytes
+        + puncher
+            .as_ref()
+            .map(|p| p.total_reclaimed_bytes())
+            .unwrap_or(0);
+
+    Ok(ExtractionSummary {
+        job_id: tracker.manifest.job_id.clone(),
+        archive_path: params.archive_path.to_path_buf(),
+        destination: params.destination.to_path_buf(),
+        manifest_path: params.manifest_path.to_path_buf(),
+        total_entries: params.entries.len(),
+        extracted_files,
+        skipped_files,
+        created_directories,
+        total_uncompressed_bytes,
+        sparse_bytes_saved,
+        reclaimed_archive_bytes,
+        peak_disk_footprint_bytes: peak_disk_footprint,
+        throughput_mb_per_sec,
+        duration,
+    })
+}
+
 pub struct ExtractionEngine;
 
 impl ExtractionEngine {
@@ -118,9 +427,8 @@ impl ExtractionEngine {
         let start_time = Instant::now();
 
         // 1. Inspect archive headers and resolve data offsets
-        let inspection = ZipInspector::inspect(archive_path).map_err(|e| {
-            ExtractionError::Archive(format!("Failed to inspect archive: {}", e))
-        })?;
+        let inspection = ZipInspector::inspect(archive_path)
+            .map_err(|e| ExtractionError::Archive(format!("Failed to inspect archive: {}", e)))?;
 
         // Security check: Overlapping compressed data streams (e.g. Fifield non-linear zip bomb)
         if options.reclaim_archive && inspection.has_overlapping_entries {
@@ -149,7 +457,7 @@ impl ExtractionEngine {
         }
 
         // 2. Open archive for streaming and optional in-place reclamation
-        let (mut archive_file, mut puncher) = if options.reclaim_archive {
+        let (archive_file, puncher) = if options.reclaim_archive {
             let file = std::fs::OpenOptions::new()
                 .read(true)
                 .write(true)
@@ -161,7 +469,10 @@ impl ExtractionEngine {
                     ))
                 })?;
             let puncher_file = file.try_clone().map_err(|e| {
-                ExtractionError::Archive(format!("Failed to clone archive handle for reclamation: {}", e))
+                ExtractionError::Archive(format!(
+                    "Failed to clone archive handle for reclamation: {}",
+                    e
+                ))
             })?;
             let puncher = ArchiveHolePuncher::new(
                 puncher_file,
@@ -176,19 +487,28 @@ impl ExtractionEngine {
             (file, None)
         };
 
-        // 3. Ensure destination directory exists
-        std::fs::create_dir_all(&options.destination).map_err(|e| {
-            ExtractionError::Io {
-                entry: options.destination.to_string_lossy().to_string(),
-                source: e,
-            }
+        // 3. Ensure destination directory exists and canonicalize (P1-04)
+        std::fs::create_dir_all(&options.destination).map_err(|e| ExtractionError::Io {
+            entry: options.destination.to_string_lossy().to_string(),
+            source: e,
         })?;
+        let destination = options
+            .destination
+            .canonicalize()
+            .unwrap_or_else(|_| options.destination.clone());
+
+        // File locking for destination directory (P2-13)
+        let state_dir = options
+            .state_dir
+            .clone()
+            .unwrap_or_else(|| destination.join(".unpackr"));
+        let _dest_lock = DestinationLock::acquire(&state_dir)?;
 
         // 4. Setup or load Job Manifest State
         let job_id = JobId::generate(archive_path, &inspection.identity);
         let manifest_path = match &options.state_dir {
             Some(dir) => dir.join(job_id.as_str()).join("manifest.json"),
-            None => options.destination.join(".unpackr").join("manifest.json"),
+            None => destination.join(".unpackr").join("manifest.json"),
         };
 
         let mut tracker = if manifest_path.exists() {
@@ -197,7 +517,10 @@ impl ExtractionEngine {
             })?;
             // Verify archive identity
             tr.verify_archive_identity(archive_path).map_err(|e| {
-                ExtractionError::Archive(format!("Existing manifest archive validation failed: {}", e))
+                ExtractionError::Archive(format!(
+                    "Existing manifest archive validation failed: {}",
+                    e
+                ))
             })?;
             // Reconcile and clean any in-flight state from interrupted previous run
             tr.reconcile_and_clean(false, false).map_err(|e| {
@@ -205,12 +528,11 @@ impl ExtractionEngine {
             })?;
             tr
         } else {
-            let manifest = ExtractionManifest::create_new(
-                job_id.as_str(),
-                &inspection,
-                &options.destination,
-            )
-            .map_err(|e| ExtractionError::Archive(format!("Failed to initialize manifest: {}", e)))?;
+            let manifest =
+                ExtractionManifest::create_new(job_id.as_str(), &inspection, &destination)
+                    .map_err(|e| {
+                        ExtractionError::Archive(format!("Failed to initialize manifest: {}", e))
+                    })?;
             manifest.save_atomic(&manifest_path).map_err(|e| {
                 ExtractionError::Archive(format!("Failed to save initial manifest: {}", e))
             })?;
@@ -224,191 +546,28 @@ impl ExtractionEngine {
             StateTracker::new(manifest, manifest_path.clone())
         };
 
-        let initial_archive_phys = get_physical_allocated_bytes(archive_path)
-            .unwrap_or(inspection.file_size);
-        let mut peak_disk_footprint = initial_archive_phys;
-        let mut current_extracted_bytes = 0u64;
-        let mut current_sparse_saved = 0u64;
-        let mut current_reclaimed_bytes = 0u64;
+        let initial_archive_phys =
+            get_physical_allocated_bytes(archive_path).unwrap_or(inspection.file_size);
 
-        let mut extracted_files = 0;
-        let mut skipped_files = 0;
-        let mut created_directories = 0;
-        let mut total_uncompressed_bytes = 0u64;
-        let mut sparse_bytes_saved = 0u64;
-
-        // 5. Sequential streaming extraction with live state tracking
-        for (i, entry) in inspection.entries.iter().enumerate() {
-            // Check if already verified in manifest (only if not forcing Overwrite or Rename)
-            if options.collision_policy != CollisionPolicy::Overwrite
-                && options.collision_policy != CollisionPolicy::Rename
-            {
-                if let Some(record) = tracker.manifest.entries.get(&entry.name) {
-                    if matches!(record.state, EntryState::Verified | EntryState::Reclaimed) {
-                        if options.verbose {
-                            println!(
-                                "[{}/{}] (Verified) Skipping: {}",
-                                i + 1,
-                                inspection.entries.len(),
-                                entry.name
-                            );
-                        }
-                        if !entry.is_dir {
-                            extracted_files += 1;
-                            total_uncompressed_bytes += entry.uncompressed_size;
-                        } else {
-                            created_directories += 1;
-                        }
-                        continue;
-                    }
-                }
-            }
-
-            if options.verbose {
-                println!(
-                    "[{}/{}] Extracting: {}",
-                    i + 1,
-                    inspection.entries.len(),
-                    entry.name
-                );
-            }
-
-            // Security check: Single file resource limit
-            if let Some(max_file) = options.max_file_size {
-                if entry.uncompressed_size > max_file {
-                    return Err(ExtractionError::ResourceLimitExceeded(format!(
-                        "Entry '{}' uncompressed size is {} bytes, exceeding configured limit of {} bytes",
-                        entry.name, entry.uncompressed_size, max_file
-                    )));
-                }
-            }
-
-            // Transition: PENDING -> EXTRACTING
-            tracker.set_entry_extracting(&entry.name);
-
-            let result = EntryWorker::extract_entry(
-                &mut archive_file,
-                entry,
-                &options.destination,
-                options.collision_policy,
-                options.enable_sparse,
-                options.max_compression_ratio,
-            );
-
-            match result {
-                Ok(WorkerResult::Extracted {
-                    path,
-                    uncompressed_bytes,
-                    sparse_bytes_saved: sparse_saved,
-                }) => {
-                    // Transition: EXTRACTING -> EXTRACTED -> VERIFIED
-                    tracker.set_entry_extracted(&entry.name);
-                    tracker
-                        .set_entry_verified(&entry.name, path)
-                        .map_err(|e| ExtractionError::Archive(e.to_string()))?;
-
-                    // If storage reclamation enabled: punch hole in source archive
-                    let mut punched_bytes = 0u64;
-                    if let Some(p) = &mut puncher {
-                        match p.punch_entry(entry) {
-                            Ok(punched) if punched > 0 => {
-                                punched_bytes = punched;
-                                let _ = tracker.set_entry_reclaimed(&entry.name);
-                            }
-                            Ok(_) => {}
-                            Err(e) => {
-                                if options.verbose {
-                                    eprintln!("Warning: storage reclamation skipped for '{}': {}", entry.name, e);
-                                }
-                            }
-                        }
-                    }
-
-                    extracted_files += 1;
-                    total_uncompressed_bytes += uncompressed_bytes;
-                    sparse_bytes_saved += sparse_saved;
-
-                    let footprint_before_punch = initial_archive_phys.saturating_sub(current_reclaimed_bytes)
-                        + (current_extracted_bytes + uncompressed_bytes).saturating_sub(current_sparse_saved + sparse_saved);
-                    if footprint_before_punch > peak_disk_footprint {
-                        peak_disk_footprint = footprint_before_punch;
-                    }
-
-                    current_extracted_bytes += uncompressed_bytes;
-                    current_sparse_saved += sparse_saved;
-                    current_reclaimed_bytes += punched_bytes;
-
-                    if std::io::stderr().is_terminal() && !options.verbose && !options.quiet {
-                        let pct = (i + 1) as f64 / inspection.entries.len() as f64 * 100.0;
-                        let elapsed_secs = start_time.elapsed().as_secs_f64();
-                        let mb_s = if elapsed_secs > 0.0 {
-                            (current_extracted_bytes as f64 / 1_048_576.0) / elapsed_secs
-                        } else {
-                            0.0
-                        };
-                        eprint!(
-                            "\rExtracting: [{}/{}] ({:>5.1}%) - {:.1} MB/s - Peak: {}",
-                            i + 1,
-                            inspection.entries.len(),
-                            pct,
-                            mb_s,
-                            crate::cli::inspect::format_bytes(peak_disk_footprint)
-                        );
-                        let _ = std::io::stderr().flush();
-                    }
-                }
-                Ok(WorkerResult::Directory { path }) => {
-                    tracker.set_entry_extracted(&entry.name);
-                    tracker
-                        .set_entry_verified(&entry.name, path)
-                        .map_err(|e| ExtractionError::Archive(e.to_string()))?;
-
-                    created_directories += 1;
-                }
-                Ok(WorkerResult::Skipped { path }) => {
-                    tracker
-                        .set_entry_skipped(&entry.name, path)
-                        .map_err(|e| ExtractionError::Archive(e.to_string()))?;
-
-                    skipped_files += 1;
-                }
-                Err(err) => {
-                    // Transition: EXTRACTING -> FAILED
-                    let _ = tracker.set_entry_failed(&entry.name, err.to_string());
-                    return Err(err);
-                }
-            }
-        }
-
-        if std::io::stderr().is_terminal() && !options.verbose && !options.quiet && !inspection.entries.is_empty() {
-            eprintln!();
-        }
-
-        let duration = start_time.elapsed();
-        let secs = duration.as_secs_f64();
-        let throughput_mb_per_sec = if secs > 0.0 {
-            (total_uncompressed_bytes as f64 / 1_048_576.0) / secs
-        } else {
-            0.0
+        let params = ProcessEntriesParams {
+            archive_path,
+            destination: &destination,
+            manifest_path: &manifest_path,
+            entries: &inspection.entries,
+            total_uncompressed_archive_size: inspection.total_uncompressed_size,
+            collision_policy: options.collision_policy,
+            enable_sparse: options.enable_sparse,
+            max_compression_ratio: options.max_compression_ratio,
+            max_file_size: options.max_file_size,
+            verbose: options.verbose,
+            quiet: options.quiet,
+            start_time,
+            initial_archive_phys,
+            already_extracted_bytes: 0,
+            already_reclaimed_bytes: 0,
         };
-        let reclaimed_archive_bytes = puncher.as_ref().map(|p| p.total_reclaimed_bytes()).unwrap_or(0);
 
-        Ok(ExtractionSummary {
-            job_id: tracker.manifest.job_id.clone(),
-            archive_path: archive_path.to_path_buf(),
-            destination: options.destination.clone(),
-            manifest_path,
-            total_entries: inspection.entries.len(),
-            extracted_files,
-            skipped_files,
-            created_directories,
-            total_uncompressed_bytes,
-            sparse_bytes_saved,
-            reclaimed_archive_bytes,
-            peak_disk_footprint_bytes: peak_disk_footprint,
-            throughput_mb_per_sec,
-            duration,
-        })
+        process_entries(archive_file, puncher, &mut tracker, params)
     }
 
     /// Resumes an interrupted extraction job, reconciling orphaned temporary files and incomplete entries.
@@ -419,21 +578,18 @@ impl ExtractionEngine {
         let start_time = Instant::now();
 
         // 1. Locate existing manifest
-        let manifest_path = find_manifest_for_job(
-            job_id_or_path,
-            options.destination_override.as_deref(),
-        )
-        .ok_or_else(|| {
-            ExtractionError::Archive(format!(
-                "Could not locate extraction manifest for '{}'",
-                job_id_or_path
-            ))
-        })?;
+        let manifest_path =
+            find_manifest_for_job(job_id_or_path, options.destination_override.as_deref())
+                .ok_or_else(|| {
+                    ExtractionError::Archive(format!(
+                        "Could not locate extraction manifest for '{}'",
+                        job_id_or_path
+                    ))
+                })?;
 
         // 2. Load tracker
-        let mut tracker = StateTracker::load_from_file(&manifest_path).map_err(|e| {
-            ExtractionError::Archive(format!("Failed to load manifest: {}", e))
-        })?;
+        let mut tracker = StateTracker::load_from_file(&manifest_path)
+            .map_err(|e| ExtractionError::Archive(format!("Failed to load manifest: {}", e)))?;
 
         // 3. Resolve archive path
         let archive_path = options
@@ -448,21 +604,28 @@ impl ExtractionEngine {
             )));
         }
 
-        // 4. Verify archive identity against initial inspection
-        tracker.verify_archive_identity(&archive_path).map_err(|e| {
-            ExtractionError::Archive(format!("Archive validation failed on resume: {}", e))
-        })?;
+        // 4. Verify archive identity against initial inspection (using cached inspection if matched, P2-10)
+        let maybe_inspection = tracker
+            .verify_archive_identity_with_inspection(&archive_path)
+            .map_err(|e| {
+                ExtractionError::Archive(format!("Archive validation failed on resume: {}", e))
+            })?;
 
-        // 5. Resolve destination
-        let destination = options
+        // 5. Resolve and canonicalize destination (P1-04)
+        let raw_dest = options
             .destination_override
             .clone()
             .unwrap_or_else(|| tracker.manifest.destination.clone());
 
-        std::fs::create_dir_all(&destination).map_err(|e| ExtractionError::Io {
-            entry: destination.to_string_lossy().to_string(),
+        std::fs::create_dir_all(&raw_dest).map_err(|e| ExtractionError::Io {
+            entry: raw_dest.to_string_lossy().to_string(),
             source: e,
         })?;
+        let destination = raw_dest.canonicalize().unwrap_or_else(|_| raw_dest.clone());
+
+        // File locking for destination directory (P2-13)
+        let state_dir = manifest_path.parent().unwrap_or(&destination);
+        let _dest_lock = DestinationLock::acquire(state_dir)?;
 
         // 6. Reconcile state and clean orphaned temporary files
         let rec_summary = tracker
@@ -479,10 +642,13 @@ impl ExtractionEngine {
             );
         }
 
-        // 7. Inspect archive for entry metadata
-        let inspection = ZipInspector::inspect(&archive_path).map_err(|e| {
-            ExtractionError::Archive(format!("Failed to inspect archive: {}", e))
-        })?;
+        // 7. Inspect archive for entry metadata (reuse cached inspection if available)
+        let inspection = match maybe_inspection {
+            Some(insp) => insp,
+            None => ZipInspector::inspect(&archive_path).map_err(|e| {
+                ExtractionError::Archive(format!("Failed to inspect archive: {}", e))
+            })?,
+        };
 
         // Security check: Overlapping compressed data streams (e.g. Fifield non-linear zip bomb)
         if options.reclaim_archive && inspection.has_overlapping_entries {
@@ -511,7 +677,7 @@ impl ExtractionEngine {
         }
 
         // 8. Open archive for streaming decompression and optional in-place reclamation
-        let (mut archive_file, mut puncher) = if options.reclaim_archive {
+        let (archive_file, puncher) = if options.reclaim_archive {
             let file = std::fs::OpenOptions::new()
                 .read(true)
                 .write(true)
@@ -523,7 +689,10 @@ impl ExtractionEngine {
                     ))
                 })?;
             let puncher_file = file.try_clone().map_err(|e| {
-                ExtractionError::Archive(format!("Failed to clone archive handle for reclamation: {}", e))
+                ExtractionError::Archive(format!(
+                    "Failed to clone archive handle for reclamation: {}",
+                    e
+                ))
             })?;
             let puncher = ArchiveHolePuncher::new(
                 puncher_file,
@@ -539,214 +708,50 @@ impl ExtractionEngine {
         };
 
         let collision_policy = options.collision_policy.unwrap_or(CollisionPolicy::Fail);
-        let initial_archive_phys = get_physical_allocated_bytes(&archive_path)
-            .unwrap_or(inspection.file_size);
+        let initial_archive_phys =
+            get_physical_allocated_bytes(&archive_path).unwrap_or(inspection.file_size);
 
         let mut already_extracted_bytes = 0u64;
         let mut already_reclaimed_bytes = 0u64;
         for entry in &inspection.entries {
             if let Some(record) = tracker.manifest.entries.get(&entry.name) {
-                if matches!(record.state, EntryState::Verified | EntryState::Reclaimed) && !entry.is_dir {
+                if matches!(record.state, EntryState::Verified | EntryState::Reclaimed)
+                    && !entry.is_dir
+                {
                     already_extracted_bytes += entry.uncompressed_size;
                 }
                 if matches!(record.state, EntryState::Reclaimed) && !entry.is_dir {
-                    if let Some((_, len)) = crate::reclamation::puncher::compute_inward_reclaim_range(
-                        entry.data_offset,
-                        entry.compressed_size,
-                        crate::reclamation::puncher::DEFAULT_BLOCK_SIZE,
-                    ) {
+                    if let Some((_, len)) =
+                        crate::reclamation::puncher::compute_inward_reclaim_range(
+                            entry.data_offset,
+                            entry.compressed_size,
+                            crate::reclamation::puncher::DEFAULT_BLOCK_SIZE,
+                        )
+                    {
                         already_reclaimed_bytes += len;
                     }
                 }
             }
         }
 
-        let mut peak_disk_footprint = initial_archive_phys + already_extracted_bytes;
-        let mut current_extracted_bytes = already_extracted_bytes;
-        let mut current_sparse_saved = 0u64;
-        let mut current_reclaimed_bytes = 0u64;
-
-        let mut extracted_files = 0;
-        let mut skipped_files = 0;
-        let mut created_directories = 0;
-        let mut total_uncompressed_bytes = 0u64;
-        let mut sparse_bytes_saved = 0u64;
-
-        // 9. Process remaining entries
-        for (i, entry) in inspection.entries.iter().enumerate() {
-            if collision_policy != CollisionPolicy::Overwrite
-                && collision_policy != CollisionPolicy::Rename
-            {
-                if let Some(record) = tracker.manifest.entries.get(&entry.name) {
-                    if matches!(record.state, EntryState::Verified | EntryState::Reclaimed) {
-                        if options.verbose {
-                            println!(
-                                "[{}/{}] (Already Verified) Skipping: {}",
-                                i + 1,
-                                inspection.entries.len(),
-                                entry.name
-                            );
-                        }
-                        if !entry.is_dir {
-                            extracted_files += 1;
-                            total_uncompressed_bytes += entry.uncompressed_size;
-                        } else {
-                            created_directories += 1;
-                        }
-                        continue;
-                    } else if matches!(record.state, EntryState::Skipped) {
-                        skipped_files += 1;
-                        continue;
-                    }
-                }
-            }
-
-            if options.verbose {
-                println!(
-                    "[{}/{}] Extracting: {}",
-                    i + 1,
-                    inspection.entries.len(),
-                    entry.name
-                );
-            }
-
-            // Security check: Single file resource limit
-            if let Some(max_file) = options.max_file_size {
-                if entry.uncompressed_size > max_file {
-                    return Err(ExtractionError::ResourceLimitExceeded(format!(
-                        "Entry '{}' uncompressed size is {} bytes, exceeding configured limit of {} bytes",
-                        entry.name, entry.uncompressed_size, max_file
-                    )));
-                }
-            }
-
-            // Transition: PENDING -> EXTRACTING
-            tracker.set_entry_extracting(&entry.name);
-
-            let result = EntryWorker::extract_entry(
-                &mut archive_file,
-                entry,
-                &destination,
-                collision_policy,
-                options.enable_sparse,
-                options.max_compression_ratio,
-            );
-
-            match result {
-                Ok(WorkerResult::Extracted {
-                    path,
-                    uncompressed_bytes,
-                    sparse_bytes_saved: sparse_saved,
-                }) => {
-                    // Transition: EXTRACTING -> EXTRACTED -> VERIFIED
-                    tracker.set_entry_extracted(&entry.name);
-                    tracker
-                        .set_entry_verified(&entry.name, path)
-                        .map_err(|e| ExtractionError::Archive(e.to_string()))?;
-
-                    // If storage reclamation enabled: punch hole in source archive
-                    let mut punched_bytes = 0u64;
-                    if let Some(p) = &mut puncher {
-                        match p.punch_entry(entry) {
-                            Ok(punched) if punched > 0 => {
-                                punched_bytes = punched;
-                                let _ = tracker.set_entry_reclaimed(&entry.name);
-                            }
-                            Ok(_) => {}
-                            Err(e) => {
-                                if options.verbose {
-                                    eprintln!("Warning: storage reclamation skipped for '{}': {}", entry.name, e);
-                                }
-                            }
-                        }
-                    }
-
-                    extracted_files += 1;
-                    total_uncompressed_bytes += uncompressed_bytes;
-                    sparse_bytes_saved += sparse_saved;
-
-                    let footprint_before_punch = initial_archive_phys.saturating_sub(current_reclaimed_bytes)
-                        + (current_extracted_bytes + uncompressed_bytes).saturating_sub(current_sparse_saved + sparse_saved);
-                    if footprint_before_punch > peak_disk_footprint {
-                        peak_disk_footprint = footprint_before_punch;
-                    }
-
-                    current_extracted_bytes += uncompressed_bytes;
-                    current_sparse_saved += sparse_saved;
-                    current_reclaimed_bytes += punched_bytes;
-
-                    if std::io::stderr().is_terminal() && !options.verbose && !options.quiet {
-                        let pct = (i + 1) as f64 / inspection.entries.len() as f64 * 100.0;
-                        let elapsed_secs = start_time.elapsed().as_secs_f64();
-                        let newly_extracted = current_extracted_bytes.saturating_sub(already_extracted_bytes);
-                        let mb_s = if elapsed_secs > 0.0 {
-                            (newly_extracted as f64 / 1_048_576.0) / elapsed_secs
-                        } else {
-                            0.0
-                        };
-                        eprint!(
-                            "\rExtracting: [{}/{}] ({:>5.1}%) - {:.1} MB/s - Peak: {}",
-                            i + 1,
-                            inspection.entries.len(),
-                            pct,
-                            mb_s,
-                            crate::cli::inspect::format_bytes(peak_disk_footprint)
-                        );
-                        let _ = std::io::stderr().flush();
-                    }
-                }
-                Ok(WorkerResult::Directory { path }) => {
-                    tracker.set_entry_extracted(&entry.name);
-                    tracker
-                        .set_entry_verified(&entry.name, path)
-                        .map_err(|e| ExtractionError::Archive(e.to_string()))?;
-
-                    created_directories += 1;
-                }
-                Ok(WorkerResult::Skipped { path }) => {
-                    tracker
-                        .set_entry_skipped(&entry.name, path)
-                        .map_err(|e| ExtractionError::Archive(e.to_string()))?;
-
-                    skipped_files += 1;
-                }
-                Err(err) => {
-                    // Transition: EXTRACTING -> FAILED
-                    let _ = tracker.set_entry_failed(&entry.name, err.to_string());
-                    return Err(err);
-                }
-            }
-        }
-
-        if std::io::stderr().is_terminal() && !options.verbose && !options.quiet && !inspection.entries.is_empty() {
-            eprintln!();
-        }
-
-        let duration = start_time.elapsed();
-        let secs = duration.as_secs_f64();
-        let newly_extracted = current_extracted_bytes.saturating_sub(already_extracted_bytes);
-        let throughput_mb_per_sec = if secs > 0.0 {
-            (newly_extracted as f64 / 1_048_576.0) / secs
-        } else {
-            0.0
+        let params = ProcessEntriesParams {
+            archive_path: &archive_path,
+            destination: &destination,
+            manifest_path: &manifest_path,
+            entries: &inspection.entries,
+            total_uncompressed_archive_size: inspection.total_uncompressed_size,
+            collision_policy,
+            enable_sparse: options.enable_sparse,
+            max_compression_ratio: options.max_compression_ratio,
+            max_file_size: options.max_file_size,
+            verbose: options.verbose,
+            quiet: options.quiet,
+            start_time,
+            initial_archive_phys,
+            already_extracted_bytes,
+            already_reclaimed_bytes,
         };
-        let reclaimed_archive_bytes = already_reclaimed_bytes + puncher.as_ref().map(|p| p.total_reclaimed_bytes()).unwrap_or(0);
 
-        Ok(ExtractionSummary {
-            job_id: tracker.manifest.job_id.clone(),
-            archive_path: archive_path.to_path_buf(),
-            destination,
-            manifest_path,
-            total_entries: inspection.entries.len(),
-            extracted_files,
-            skipped_files,
-            created_directories,
-            total_uncompressed_bytes,
-            sparse_bytes_saved,
-            reclaimed_archive_bytes,
-            peak_disk_footprint_bytes: peak_disk_footprint,
-            throughput_mb_per_sec,
-            duration,
-        })
+        process_entries(archive_file, puncher, &mut tracker, params)
     }
 }

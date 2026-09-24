@@ -1,5 +1,5 @@
-use std::path::Path;
 use std::io::Result;
+use std::path::Path;
 
 /// Returns the actual physical disk space allocated to a file in bytes,
 /// querying filesystem allocation blocks (`st_blocks * 512`) to accurately
