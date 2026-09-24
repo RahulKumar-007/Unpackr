@@ -31,7 +31,12 @@ pub fn run_status(job_id_or_path: &str, json: bool) -> Result<()> {
     println!("================================================================================");
     println!("Job ID:               {}", manifest.job_id);
     println!("Archive Path:         {}", manifest.archive.path.display());
-    println!("Archive Size:         {}", format_bytes(manifest.archive.size));
+    println!("Archive Size (Logical): {}", format_bytes(manifest.archive.size));
+    if manifest.archive.path.exists() {
+        if let Ok(phys) = crate::reclamation::get_physical_allocated_bytes(&manifest.archive.path) {
+            println!("Archive Size (Physical):{}", format_bytes(phys));
+        }
+    }
     println!("Archive Identity:     {}", manifest.archive.identity);
     println!("Destination:          {}", manifest.destination.display());
     println!("Manifest File:        {}", manifest_path.display());

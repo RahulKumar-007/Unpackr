@@ -7,6 +7,7 @@ use crate::archive::{EntryState, ZipInspector};
 use crate::extraction::collision::CollisionPolicy;
 use crate::extraction::error::ExtractionError;
 use crate::extraction::worker::{EntryWorker, WorkerResult};
+use crate::reclamation::ArchiveHolePuncher;
 use crate::state::job::{find_manifest_for_job, global_jobs_dir, JobId};
 use crate::state::manifest::ExtractionManifest;
 use crate::state::tracker::StateTracker;
@@ -45,6 +46,7 @@ pub struct ResumeOptions {
     pub collision_policy: Option<CollisionPolicy>,
     pub enable_sparse: bool,
     pub max_compression_ratio: f64,
+    pub reclaim_archive: bool,
     pub verbose: bool,
 }
 
@@ -58,6 +60,7 @@ impl Default for ResumeOptions {
             collision_policy: None,
             enable_sparse: true,
             max_compression_ratio: 100.0,
+            reclaim_archive: false,
             verbose: false,
         }
     }
@@ -75,6 +78,7 @@ pub struct ExtractionSummary {
     pub created_directories: usize,
     pub total_uncompressed_bytes: u64,
     pub sparse_bytes_saved: u64,
+    pub reclaimed_archive_bytes: u64,
     pub duration: Duration,
 }
 
@@ -93,10 +97,33 @@ impl ExtractionEngine {
             ExtractionError::Archive(format!("Failed to inspect archive: {}", e))
         })?;
 
-        // 2. Open archive for streaming
-        let mut archive_file = File::open(archive_path).map_err(|e| {
-            ExtractionError::Archive(format!("Failed to open archive for extraction: {}", e))
-        })?;
+        // 2. Open archive for streaming and optional in-place reclamation
+        let (mut archive_file, mut puncher) = if options.reclaim_archive {
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(archive_path)
+                .map_err(|e| {
+                    ExtractionError::Archive(format!(
+                        "Failed to open archive for read/write reclamation: {}",
+                        e
+                    ))
+                })?;
+            let puncher_file = file.try_clone().map_err(|e| {
+                ExtractionError::Archive(format!("Failed to clone archive handle for reclamation: {}", e))
+            })?;
+            let puncher = ArchiveHolePuncher::new(
+                puncher_file,
+                inspection.file_size,
+                inspection.central_directory_offset,
+            );
+            (file, Some(puncher))
+        } else {
+            let file = File::open(archive_path).map_err(|e| {
+                ExtractionError::Archive(format!("Failed to open archive for extraction: {}", e))
+            })?;
+            (file, None)
+        };
 
         // 3. Ensure destination directory exists
         std::fs::create_dir_all(&options.destination).map_err(|e| {
@@ -212,6 +239,21 @@ impl ExtractionEngine {
                         .set_entry_verified(&entry.name, path)
                         .map_err(|e| ExtractionError::Archive(e.to_string()))?;
 
+                    // If storage reclamation enabled: punch hole in source archive
+                    if let Some(p) = &mut puncher {
+                        match p.punch_entry(entry) {
+                            Ok(punched) if punched > 0 => {
+                                let _ = tracker.set_entry_reclaimed(&entry.name);
+                            }
+                            Ok(_) => {}
+                            Err(e) => {
+                                if options.verbose {
+                                    eprintln!("Warning: storage reclamation skipped for '{}': {}", entry.name, e);
+                                }
+                            }
+                        }
+                    }
+
                     extracted_files += 1;
                     total_uncompressed_bytes += uncompressed_bytes;
                     sparse_bytes_saved += sparse_saved;
@@ -240,6 +282,7 @@ impl ExtractionEngine {
         }
 
         let duration = start_time.elapsed();
+        let reclaimed_archive_bytes = puncher.as_ref().map(|p| p.total_reclaimed_bytes()).unwrap_or(0);
 
         Ok(ExtractionSummary {
             job_id: tracker.manifest.job_id.clone(),
@@ -252,6 +295,7 @@ impl ExtractionEngine {
             created_directories,
             total_uncompressed_bytes,
             sparse_bytes_saved,
+            reclaimed_archive_bytes,
             duration,
         })
     }
@@ -329,10 +373,33 @@ impl ExtractionEngine {
             ExtractionError::Archive(format!("Failed to inspect archive: {}", e))
         })?;
 
-        // 8. Open archive for streaming decompression
-        let mut archive_file = File::open(&archive_path).map_err(|e| {
-            ExtractionError::Archive(format!("Failed to open archive for resume: {}", e))
-        })?;
+        // 8. Open archive for streaming decompression and optional in-place reclamation
+        let (mut archive_file, mut puncher) = if options.reclaim_archive {
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&archive_path)
+                .map_err(|e| {
+                    ExtractionError::Archive(format!(
+                        "Failed to open archive for read/write reclamation on resume: {}",
+                        e
+                    ))
+                })?;
+            let puncher_file = file.try_clone().map_err(|e| {
+                ExtractionError::Archive(format!("Failed to clone archive handle for reclamation: {}", e))
+            })?;
+            let puncher = ArchiveHolePuncher::new(
+                puncher_file,
+                inspection.file_size,
+                inspection.central_directory_offset,
+            );
+            (file, Some(puncher))
+        } else {
+            let file = File::open(&archive_path).map_err(|e| {
+                ExtractionError::Archive(format!("Failed to open archive for resume: {}", e))
+            })?;
+            (file, None)
+        };
 
         let collision_policy = options.collision_policy.unwrap_or(CollisionPolicy::Fail);
         let mut extracted_files = 0;
@@ -403,6 +470,21 @@ impl ExtractionEngine {
                         .set_entry_verified(&entry.name, path)
                         .map_err(|e| ExtractionError::Archive(e.to_string()))?;
 
+                    // If storage reclamation enabled: punch hole in source archive
+                    if let Some(p) = &mut puncher {
+                        match p.punch_entry(entry) {
+                            Ok(punched) if punched > 0 => {
+                                let _ = tracker.set_entry_reclaimed(&entry.name);
+                            }
+                            Ok(_) => {}
+                            Err(e) => {
+                                if options.verbose {
+                                    eprintln!("Warning: storage reclamation skipped for '{}': {}", entry.name, e);
+                                }
+                            }
+                        }
+                    }
+
                     extracted_files += 1;
                     total_uncompressed_bytes += uncompressed_bytes;
                     sparse_bytes_saved += sparse_saved;
@@ -431,6 +513,7 @@ impl ExtractionEngine {
         }
 
         let duration = start_time.elapsed();
+        let reclaimed_archive_bytes = puncher.as_ref().map(|p| p.total_reclaimed_bytes()).unwrap_or(0);
 
         Ok(ExtractionSummary {
             job_id: tracker.manifest.job_id.clone(),
@@ -443,6 +526,7 @@ impl ExtractionEngine {
             created_directories,
             total_uncompressed_bytes,
             sparse_bytes_saved,
+            reclaimed_archive_bytes,
             duration,
         })
     }

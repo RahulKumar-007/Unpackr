@@ -76,6 +76,7 @@ fn test_crash_recovery_cleans_orphaned_tmp_and_resumes() {
         collision_policy: None,
         enable_sparse: true,
         max_compression_ratio: 100.0,
+        reclaim_archive: false,
         verbose: true,
     };
 

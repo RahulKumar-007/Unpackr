@@ -10,6 +10,7 @@ pub fn run_resume(
     retry_failed: bool,
     verify_existing: bool,
     collision: Option<String>,
+    reclaim_archive: bool,
     json: bool,
     verbose: bool,
 ) -> Result<()> {
@@ -25,6 +26,7 @@ pub fn run_resume(
         collision_policy,
         enable_sparse: true,
         max_compression_ratio: 100.0,
+        reclaim_archive,
         verbose,
     };
 
@@ -49,6 +51,9 @@ pub fn run_resume(
     println!("Data Written:         {}", format_bytes(summary.total_uncompressed_bytes));
     if summary.sparse_bytes_saved > 0 {
         println!("Sparse Space Saved:   {}", format_bytes(summary.sparse_bytes_saved));
+    }
+    if summary.reclaimed_archive_bytes > 0 {
+        println!("Archive Reclaimed:    {}", format_bytes(summary.reclaimed_archive_bytes));
     }
     println!("Duration:             {:.2?}", summary.duration);
     println!("================================================================================");

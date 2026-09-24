@@ -97,6 +97,10 @@ pub enum Commands {
         #[arg(long)]
         collision: Option<String>,
 
+        /// Reclaim archive storage in-place during resume
+        #[arg(long)]
+        reclaim_archive: bool,
+
         /// Output resume summary in JSON format
         #[arg(long)]
         json: bool,

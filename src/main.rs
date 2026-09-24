@@ -48,6 +48,9 @@ fn main() -> Result<()> {
                 println!("Skipped Files:        {}", summary.skipped_files);
                 println!("Data Written:         {}", unpackr::cli::inspect::format_bytes(summary.total_uncompressed_bytes));
                 println!("Sparse Space Saved:   {}", unpackr::cli::inspect::format_bytes(summary.sparse_bytes_saved));
+                if summary.reclaimed_archive_bytes > 0 {
+                    println!("Archive Reclaimed:    {}", unpackr::cli::inspect::format_bytes(summary.reclaimed_archive_bytes));
+                }
                 println!("Duration:             {:.2?}", summary.duration);
                 println!("================================================================================");
             }
@@ -59,6 +62,7 @@ fn main() -> Result<()> {
             retry_failed,
             verify,
             collision,
+            reclaim_archive,
             json,
         } => {
             unpackr::cli::resume::run_resume(
@@ -68,6 +72,7 @@ fn main() -> Result<()> {
                 retry_failed,
                 verify,
                 collision,
+                reclaim_archive,
                 json,
                 cli.verbose,
             )?;
