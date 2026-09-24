@@ -1,0 +1,67 @@
+use anyhow::Result;
+use clap::Parser;
+use unpackr::cli::{Cli, Commands};
+
+fn main() -> Result<()> {
+    let cli = Cli::parse();
+
+    match cli.command {
+        Commands::Inspect { archive, json, limit } => {
+            let limit_opt = if limit == 0 { None } else { Some(limit) };
+            unpackr::cli::inspect::run_inspect(&archive, json, limit_opt)?;
+        }
+        Commands::Extract {
+            archive,
+            destination,
+            collision,
+            no_sparse,
+            max_ratio,
+            reclaim_archive,
+            state_dir: _state_dir,
+            json,
+        } => {
+            let collision_policy = unpackr::extraction::CollisionPolicy::from_str_lossy(&collision);
+            let options = unpackr::extraction::ExtractionOptions {
+                destination: destination.clone(),
+                collision_policy,
+                enable_sparse: !no_sparse,
+                max_compression_ratio: max_ratio,
+                reclaim_archive,
+                verbose: cli.verbose,
+            };
+
+            let summary = unpackr::extraction::ExtractionEngine::extract(&archive, &options)?;
+
+            if json {
+                println!("{}", serde_json::to_string_pretty(&summary)?);
+            } else {
+                println!("================================================================================");
+                println!("                           UNPACKR EXTRACTION COMPLETE                          ");
+                println!("================================================================================");
+                println!("Archive:              {}", summary.archive_path.display());
+                println!("Destination:          {}", summary.destination.display());
+                println!("Extracted Files:      {}", summary.extracted_files);
+                println!("Created Directories:  {}", summary.created_directories);
+                println!("Skipped Files:        {}", summary.skipped_files);
+                println!("Data Written:         {}", unpackr::cli::inspect::format_bytes(summary.total_uncompressed_bytes));
+                println!("Sparse Space Saved:   {}", unpackr::cli::inspect::format_bytes(summary.sparse_bytes_saved));
+                println!("Duration:             {:.2?}", summary.duration);
+                println!("================================================================================");
+            }
+        }
+        Commands::Resume { job_id } => {
+            println!("Resume command scheduled for Phase 4 implementation (Job ID: {}).", job_id);
+        }
+        Commands::Status { job_id } => {
+            println!("Status command scheduled for Phase 6 implementation (Job ID: {}).", job_id);
+        }
+        Commands::Verify { job_id } => {
+            println!("Verify command scheduled for Phase 3 implementation (Job ID: {}).", job_id);
+        }
+        Commands::Cancel { job_id } => {
+            println!("Cancel command scheduled for Phase 4 implementation (Job ID: {}).", job_id);
+        }
+    }
+
+    Ok(())
+}

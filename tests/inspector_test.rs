@@ -1,0 +1,118 @@
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom, Write};
+use tempfile::NamedTempFile;
+use unpackr::archive::{CompressionMethod, ZipInspector};
+use zip::write::SimpleFileOptions;
+use zip::ZipWriter;
+
+#[test]
+fn test_inspect_stored_and_deflated_entries() {
+    let tmp_file = NamedTempFile::new().unwrap();
+    let path = tmp_file.path().to_path_buf();
+
+    // Create a test zip file
+    {
+        let file = File::create(&path).unwrap();
+        let mut zip = ZipWriter::new(file);
+
+        // Entry 1: Stored
+        let stored_opts = SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        zip.start_file("stored.txt", stored_opts).unwrap();
+        zip.write_all(b"Hello Stored World!").unwrap();
+
+        // Entry 2: Deflated
+        let deflated_opts = SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        zip.start_file("nested/deflated.txt", deflated_opts).unwrap();
+        zip.write_all(b"A quick brown fox jumps over the lazy dog. A quick brown fox jumps over the lazy dog.").unwrap();
+
+        // Entry 3: Directory
+        zip.add_directory("nested/subdir/", SimpleFileOptions::default()).unwrap();
+
+        zip.finish().unwrap();
+    }
+
+    let inspection = ZipInspector::inspect(&path).expect("Failed to inspect zip");
+
+    assert_eq!(inspection.total_entries, 3);
+    assert!(!inspection.identity.is_empty());
+    assert!(inspection.file_size > 0);
+    assert_eq!(inspection.is_zip64, false);
+
+    // Verify Entry 0: stored.txt
+    let entry0 = &inspection.entries[0];
+    assert_eq!(entry0.name, "stored.txt");
+    assert_eq!(entry0.compression_method, CompressionMethod::Stored);
+    assert_eq!(entry0.uncompressed_size, 19);
+    assert_eq!(entry0.compressed_size, 19);
+    assert_eq!(entry0.is_dir, false);
+    assert!(entry0.data_offset > entry0.local_header_offset);
+
+    // Read directly from data_offset to verify data_offset accuracy
+    let mut file = File::open(&path).unwrap();
+    file.seek(SeekFrom::Start(entry0.data_offset)).unwrap();
+    let mut buf = vec![0u8; entry0.compressed_size as usize];
+    file.read_exact(&mut buf).unwrap();
+    assert_eq!(&buf, b"Hello Stored World!");
+
+    // Verify Entry 1: nested/deflated.txt
+    let entry1 = &inspection.entries[1];
+    assert_eq!(entry1.name, "nested/deflated.txt");
+    assert_eq!(entry1.compression_method, CompressionMethod::Deflated);
+    assert_eq!(entry1.uncompressed_size, 85);
+    assert!(entry1.compressed_size < entry1.uncompressed_size);
+    assert!(entry1.data_offset > entry1.local_header_offset);
+
+    // Verify Entry 2: nested/subdir/
+    let entry2 = &inspection.entries[2];
+    assert_eq!(entry2.name, "nested/subdir/");
+    assert_eq!(entry2.is_dir, true);
+    assert_eq!(entry2.uncompressed_size, 0);
+}
+
+#[test]
+fn test_inspect_corrupt_file() {
+    let mut tmp_file = NamedTempFile::new().unwrap();
+    tmp_file.write_all(b"corrupt non-zip data of arbitrary bytes").unwrap();
+    tmp_file.flush().unwrap();
+
+    let result = ZipInspector::inspect(tmp_file.path());
+    assert!(result.is_err());
+    let err_msg = result.unwrap_err().to_string();
+    assert!(err_msg.contains("signature not found") || err_msg.contains("too small"));
+}
+
+#[test]
+fn test_archive_identity_consistency() {
+    let tmp_file = NamedTempFile::new().unwrap();
+    let path = tmp_file.path().to_path_buf();
+
+    {
+        let file = File::create(&path).unwrap();
+        let mut zip = ZipWriter::new(file);
+        zip.start_file("sample.txt", SimpleFileOptions::default()).unwrap();
+        zip.write_all(b"constant content").unwrap();
+        zip.finish().unwrap();
+    }
+
+    let id1 = unpackr::archive::compute_archive_identity(&path).unwrap();
+    let id2 = unpackr::archive::compute_archive_identity(&path).unwrap();
+    assert_eq!(id1, id2);
+}
+
+#[test]
+fn test_inspect_zip_slip_sample() {
+    let path = std::path::Path::new("tests/test_data/zip_slip.zip");
+    if path.exists() {
+        let inspection = ZipInspector::inspect(path).expect("Failed to inspect zip slip archive");
+        assert_eq!(inspection.total_entries, 2);
+        let entry0 = &inspection.entries[0];
+        assert_eq!(entry0.name, "../../etc/passwd");
+
+        // Verify that path sanitizer catches the slip
+        let sanitize_result = unpackr::security::path::sanitize_entry_path(&entry0.name);
+        assert!(sanitize_result.is_err());
+    }
+}
+
