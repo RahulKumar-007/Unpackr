@@ -1,4 +1,6 @@
 pub mod inspect;
+pub mod status;
+pub mod verify;
 
 use std::path::PathBuf;
 use clap::{Parser, Subcommand};
@@ -77,14 +79,22 @@ pub enum Commands {
 
     /// Show current status and disk savings for a job
     Status {
-        /// Job ID to inspect
+        /// Job ID, destination directory, or manifest path to inspect
         job_id: String,
+
+        /// Output status in JSON format
+        #[arg(long)]
+        json: bool,
     },
 
     /// Verify an extracted destination against archive metadata
     Verify {
-        /// Job ID or archive path
+        /// Job ID, destination directory, or manifest path to verify
         job_id: String,
+
+        /// Output verification results in JSON format
+        #[arg(long)]
+        json: bool,
     },
 
     /// Cancel a running job and clean up temporary state

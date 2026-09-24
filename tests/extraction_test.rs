@@ -16,6 +16,7 @@ fn test_streaming_extraction_accuracy() {
         enable_sparse: true,
         max_compression_ratio: 200.0,
         reclaim_archive: false,
+        state_dir: None,
         verbose: true,
     };
 
@@ -76,6 +77,7 @@ fn test_sparse_hole_extraction() {
         enable_sparse: true,
         max_compression_ratio: 2000.0,
         reclaim_archive: false,
+        state_dir: None,
         verbose: false,
     };
 
@@ -104,6 +106,7 @@ fn test_zip_slip_rejection_at_extraction() {
         enable_sparse: true,
         max_compression_ratio: 100.0,
         reclaim_archive: false,
+        state_dir: None,
         verbose: false,
     };
 
@@ -140,6 +143,7 @@ fn test_compression_bomb_rejection() {
         enable_sparse: true,
         max_compression_ratio: 10.0, // Low threshold
         reclaim_archive: false,
+        state_dir: None,
         verbose: false,
     };
 
@@ -174,6 +178,7 @@ fn test_collision_policies_at_engine_level() {
         enable_sparse: true,
         max_compression_ratio: 100.0,
         reclaim_archive: false,
+        state_dir: None,
         verbose: false,
     };
     assert!(ExtractionEngine::extract(zip_file.path(), &options).is_err());

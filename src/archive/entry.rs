@@ -32,6 +32,7 @@ pub enum EntryState {
     Extracted,
     Verified,
     Reclaimed,
+    Skipped,
     Failed(String),
 }
 
@@ -43,6 +44,7 @@ impl EntryState {
             EntryState::Extracted => "EXTRACTED",
             EntryState::Verified => "VERIFIED",
             EntryState::Reclaimed => "RECLAIMED",
+            EntryState::Skipped => "SKIPPED",
             EntryState::Failed(_) => "FAILED",
         }
     }

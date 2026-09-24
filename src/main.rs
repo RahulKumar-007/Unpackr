@@ -17,7 +17,7 @@ fn main() -> Result<()> {
             no_sparse,
             max_ratio,
             reclaim_archive,
-            state_dir: _state_dir,
+            state_dir,
             json,
         } => {
             let collision_policy = unpackr::extraction::CollisionPolicy::from_str_lossy(&collision);
@@ -27,6 +27,7 @@ fn main() -> Result<()> {
                 enable_sparse: !no_sparse,
                 max_compression_ratio: max_ratio,
                 reclaim_archive,
+                state_dir,
                 verbose: cli.verbose,
             };
 
@@ -38,8 +39,10 @@ fn main() -> Result<()> {
                 println!("================================================================================");
                 println!("                           UNPACKR EXTRACTION COMPLETE                          ");
                 println!("================================================================================");
+                println!("Job ID:               {}", summary.job_id);
                 println!("Archive:              {}", summary.archive_path.display());
                 println!("Destination:          {}", summary.destination.display());
+                println!("Manifest:             {}", summary.manifest_path.display());
                 println!("Extracted Files:      {}", summary.extracted_files);
                 println!("Created Directories:  {}", summary.created_directories);
                 println!("Skipped Files:        {}", summary.skipped_files);
@@ -52,11 +55,11 @@ fn main() -> Result<()> {
         Commands::Resume { job_id } => {
             println!("Resume command scheduled for Phase 4 implementation (Job ID: {}).", job_id);
         }
-        Commands::Status { job_id } => {
-            println!("Status command scheduled for Phase 6 implementation (Job ID: {}).", job_id);
+        Commands::Status { job_id, json } => {
+            unpackr::cli::status::run_status(&job_id, json)?;
         }
-        Commands::Verify { job_id } => {
-            println!("Verify command scheduled for Phase 3 implementation (Job ID: {}).", job_id);
+        Commands::Verify { job_id, json } => {
+            unpackr::cli::verify::run_verify(&job_id, json)?;
         }
         Commands::Cancel { job_id } => {
             println!("Cancel command scheduled for Phase 4 implementation (Job ID: {}).", job_id);
