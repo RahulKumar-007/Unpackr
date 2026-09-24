@@ -42,6 +42,8 @@ pub fn global_jobs_dir() -> Option<PathBuf> {
         .map(|home| home.join(".unpackr").join("jobs"))
 }
 
+use crate::state::manifest::ExtractionManifest;
+
 /// Locates a manifest file given a job ID, destination directory, or direct file path.
 pub fn find_manifest_file(job_id_or_path: &str) -> Option<PathBuf> {
     let direct_path = PathBuf::from(job_id_or_path);
@@ -67,6 +69,12 @@ pub fn find_manifest_file(job_id_or_path: &str) -> Option<PathBuf> {
     if let Some(global_dir) = global_jobs_dir() {
         let global_manifest = global_dir.join(job_id_or_path).join("manifest.json");
         if global_manifest.is_file() {
+            if let Ok(manifest) = ExtractionManifest::load(&global_manifest) {
+                let dest_manifest = manifest.destination.join(".unpackr").join("manifest.json");
+                if dest_manifest.is_file() {
+                    return Some(dest_manifest);
+                }
+            }
             return Some(global_manifest);
         }
     }

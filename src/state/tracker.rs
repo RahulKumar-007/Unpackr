@@ -6,7 +6,7 @@ use anyhow::{bail, Context, Result};
 use crc32fast::Hasher;
 use serde::{Deserialize, Serialize};
 
-use crate::archive::{compute_archive_identity, EntryState};
+use crate::archive::{compute_archive_identity, EntryState, ZipInspector};
 use crate::state::manifest::ExtractionManifest;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,16 +51,68 @@ impl StateTracker {
     /// Verifies that the source archive on disk still matches the cryptographic
     /// identity stored in the manifest.
     pub fn verify_archive_identity(&self, current_archive_path: &Path) -> Result<()> {
-        let current_identity = compute_archive_identity(current_archive_path)
-            .with_context(|| format!("Failed to compute identity for {:?}", current_archive_path))?;
+        let metadata = std::fs::metadata(current_archive_path)
+            .with_context(|| format!("Failed to read metadata for {:?}", current_archive_path))?;
 
-        if current_identity != self.manifest.archive.identity {
+        if metadata.len() != self.manifest.archive.size {
             bail!(
-                "Archive identity mismatch!\nExpected: {}\nCurrent:  {}\nThe archive file appears to have been modified or replaced.",
-                self.manifest.archive.identity,
-                current_identity
+                "Archive size mismatch! Expected: {} bytes, Current: {} bytes",
+                self.manifest.archive.size,
+                metadata.len()
             );
         }
+
+        // If no entries have been reclaimed yet, the archive must match the exact initial hash.
+        if self.manifest.reclaimed_count() == 0 {
+            let current_identity = compute_archive_identity(current_archive_path)
+                .with_context(|| format!("Failed to compute identity for {:?}", current_archive_path))?;
+
+            if current_identity != self.manifest.archive.identity {
+                bail!(
+                    "Archive identity mismatch!\nExpected: {}\nCurrent:  {}\nThe archive file appears to have been modified or replaced.",
+                    self.manifest.archive.identity,
+                    current_identity
+                );
+            }
+            return Ok(());
+        }
+
+        // If entries have already been reclaimed, in-place hole punching has legally altered
+        // the payload blocks and filesystem mtime. We verify structural archive identity:
+        // 1. Central directory entries must match all manifest records
+        let inspection = ZipInspector::inspect(current_archive_path)
+            .with_context(|| "Failed to parse Central Directory of reclaimed archive")?;
+
+        if inspection.entries.len() != self.manifest.entries.len() {
+            bail!(
+                "Archive entry count mismatch! Manifest has {}, archive has {}",
+                self.manifest.entries.len(),
+                inspection.entries.len()
+            );
+        }
+
+        for entry in &inspection.entries {
+            let record = match self.manifest.entries.get(&entry.name) {
+                Some(r) => r,
+                None => bail!("Archive contains unexpected entry: {}", entry.name),
+            };
+            if record.crc32 != entry.crc32 || record.uncompressed_size != entry.uncompressed_size {
+                bail!("Entry metadata mismatch for: {}", entry.name);
+            }
+        }
+
+        // 2. Local file headers must have valid signatures
+        use std::io::{Seek, SeekFrom};
+        let mut file = File::open(current_archive_path)?;
+        let mut sig = [0u8; 4];
+        for record in self.manifest.entries.values() {
+            file.seek(SeekFrom::Start(record.local_header_offset))?;
+            file.read_exact(&mut sig)?;
+            if u32::from_le_bytes(sig) != 0x04034b50 {
+                bail!("Corrupted local file header for entry: {}", record.name);
+            }
+        }
+
         Ok(())
     }
 

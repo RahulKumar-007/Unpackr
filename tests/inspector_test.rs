@@ -38,7 +38,7 @@ fn test_inspect_stored_and_deflated_entries() {
     assert_eq!(inspection.total_entries, 3);
     assert!(!inspection.identity.is_empty());
     assert!(inspection.file_size > 0);
-    assert_eq!(inspection.is_zip64, false);
+    assert!(!inspection.is_zip64);
 
     // Verify Entry 0: stored.txt
     let entry0 = &inspection.entries[0];
@@ -46,7 +46,7 @@ fn test_inspect_stored_and_deflated_entries() {
     assert_eq!(entry0.compression_method, CompressionMethod::Stored);
     assert_eq!(entry0.uncompressed_size, 19);
     assert_eq!(entry0.compressed_size, 19);
-    assert_eq!(entry0.is_dir, false);
+    assert!(!entry0.is_dir);
     assert!(entry0.data_offset > entry0.local_header_offset);
 
     // Read directly from data_offset to verify data_offset accuracy
@@ -67,7 +67,7 @@ fn test_inspect_stored_and_deflated_entries() {
     // Verify Entry 2: nested/subdir/
     let entry2 = &inspection.entries[2];
     assert_eq!(entry2.name, "nested/subdir/");
-    assert_eq!(entry2.is_dir, true);
+    assert!(entry2.is_dir);
     assert_eq!(entry2.uncompressed_size, 0);
 }
 

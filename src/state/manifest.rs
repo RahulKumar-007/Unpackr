@@ -57,7 +57,7 @@ impl ExtractionManifest {
 
         let archive_mtime = fs::metadata(&inspection.path)
             .and_then(|m| m.modified())
-            .and_then(|t| t.duration_since(UNIX_EPOCH).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)))
+            .and_then(|t| t.duration_since(UNIX_EPOCH).map_err(std::io::Error::other))
             .map(|d| d.as_secs())
             .unwrap_or(0);
 

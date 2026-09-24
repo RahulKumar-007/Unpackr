@@ -1,4 +1,5 @@
 use std::fs::File;
+use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
@@ -7,7 +8,7 @@ use crate::archive::{EntryState, ZipInspector};
 use crate::extraction::collision::CollisionPolicy;
 use crate::extraction::error::ExtractionError;
 use crate::extraction::worker::{EntryWorker, WorkerResult};
-use crate::reclamation::ArchiveHolePuncher;
+use crate::reclamation::{get_physical_allocated_bytes, ArchiveHolePuncher};
 use crate::state::job::{find_manifest_for_job, global_jobs_dir, JobId};
 use crate::state::manifest::ExtractionManifest;
 use crate::state::tracker::StateTracker;
@@ -79,6 +80,8 @@ pub struct ExtractionSummary {
     pub total_uncompressed_bytes: u64,
     pub sparse_bytes_saved: u64,
     pub reclaimed_archive_bytes: u64,
+    pub peak_disk_footprint_bytes: u64,
+    pub throughput_mb_per_sec: f64,
     pub duration: Duration,
 }
 
@@ -173,6 +176,13 @@ impl ExtractionEngine {
             StateTracker::new(manifest, manifest_path.clone())
         };
 
+        let initial_archive_phys = get_physical_allocated_bytes(archive_path)
+            .unwrap_or(inspection.file_size);
+        let mut peak_disk_footprint = initial_archive_phys;
+        let mut current_extracted_bytes = 0u64;
+        let mut current_sparse_saved = 0u64;
+        let mut current_reclaimed_bytes = 0u64;
+
         let mut extracted_files = 0;
         let mut skipped_files = 0;
         let mut created_directories = 0;
@@ -240,9 +250,11 @@ impl ExtractionEngine {
                         .map_err(|e| ExtractionError::Archive(e.to_string()))?;
 
                     // If storage reclamation enabled: punch hole in source archive
+                    let mut punched_bytes = 0u64;
                     if let Some(p) = &mut puncher {
                         match p.punch_entry(entry) {
                             Ok(punched) if punched > 0 => {
+                                punched_bytes = punched;
                                 let _ = tracker.set_entry_reclaimed(&entry.name);
                             }
                             Ok(_) => {}
@@ -257,6 +269,35 @@ impl ExtractionEngine {
                     extracted_files += 1;
                     total_uncompressed_bytes += uncompressed_bytes;
                     sparse_bytes_saved += sparse_saved;
+
+                    let footprint_before_punch = initial_archive_phys.saturating_sub(current_reclaimed_bytes)
+                        + (current_extracted_bytes + uncompressed_bytes).saturating_sub(current_sparse_saved + sparse_saved);
+                    if footprint_before_punch > peak_disk_footprint {
+                        peak_disk_footprint = footprint_before_punch;
+                    }
+
+                    current_extracted_bytes += uncompressed_bytes;
+                    current_sparse_saved += sparse_saved;
+                    current_reclaimed_bytes += punched_bytes;
+
+                    if std::io::stdout().is_terminal() && !options.verbose {
+                        let pct = (i + 1) as f64 / inspection.entries.len() as f64 * 100.0;
+                        let elapsed_secs = start_time.elapsed().as_secs_f64();
+                        let mb_s = if elapsed_secs > 0.0 {
+                            (current_extracted_bytes as f64 / 1_048_576.0) / elapsed_secs
+                        } else {
+                            0.0
+                        };
+                        print!(
+                            "\rExtracting: [{}/{}] ({:>5.1}%) - {:.1} MB/s - Peak: {}",
+                            i + 1,
+                            inspection.entries.len(),
+                            pct,
+                            mb_s,
+                            crate::cli::inspect::format_bytes(peak_disk_footprint)
+                        );
+                        let _ = std::io::stdout().flush();
+                    }
                 }
                 Ok(WorkerResult::Directory { path }) => {
                     tracker.set_entry_extracted(&entry.name);
@@ -281,7 +322,17 @@ impl ExtractionEngine {
             }
         }
 
+        if std::io::stdout().is_terminal() && !options.verbose && !inspection.entries.is_empty() {
+            println!();
+        }
+
         let duration = start_time.elapsed();
+        let secs = duration.as_secs_f64();
+        let throughput_mb_per_sec = if secs > 0.0 {
+            (total_uncompressed_bytes as f64 / 1_048_576.0) / secs
+        } else {
+            0.0
+        };
         let reclaimed_archive_bytes = puncher.as_ref().map(|p| p.total_reclaimed_bytes()).unwrap_or(0);
 
         Ok(ExtractionSummary {
@@ -296,6 +347,8 @@ impl ExtractionEngine {
             total_uncompressed_bytes,
             sparse_bytes_saved,
             reclaimed_archive_bytes,
+            peak_disk_footprint_bytes: peak_disk_footprint,
+            throughput_mb_per_sec,
             duration,
         })
     }
@@ -402,6 +455,33 @@ impl ExtractionEngine {
         };
 
         let collision_policy = options.collision_policy.unwrap_or(CollisionPolicy::Fail);
+        let initial_archive_phys = get_physical_allocated_bytes(&archive_path)
+            .unwrap_or(inspection.file_size);
+
+        let mut already_extracted_bytes = 0u64;
+        let mut already_reclaimed_bytes = 0u64;
+        for entry in &inspection.entries {
+            if let Some(record) = tracker.manifest.entries.get(&entry.name) {
+                if matches!(record.state, EntryState::Verified | EntryState::Reclaimed) && !entry.is_dir {
+                    already_extracted_bytes += entry.uncompressed_size;
+                }
+                if matches!(record.state, EntryState::Reclaimed) && !entry.is_dir {
+                    if let Some((_, len)) = crate::reclamation::puncher::compute_inward_reclaim_range(
+                        entry.data_offset,
+                        entry.compressed_size,
+                        crate::reclamation::puncher::DEFAULT_BLOCK_SIZE,
+                    ) {
+                        already_reclaimed_bytes += len;
+                    }
+                }
+            }
+        }
+
+        let mut peak_disk_footprint = initial_archive_phys + already_extracted_bytes;
+        let mut current_extracted_bytes = already_extracted_bytes;
+        let mut current_sparse_saved = 0u64;
+        let mut current_reclaimed_bytes = 0u64;
+
         let mut extracted_files = 0;
         let mut skipped_files = 0;
         let mut created_directories = 0;
@@ -471,9 +551,11 @@ impl ExtractionEngine {
                         .map_err(|e| ExtractionError::Archive(e.to_string()))?;
 
                     // If storage reclamation enabled: punch hole in source archive
+                    let mut punched_bytes = 0u64;
                     if let Some(p) = &mut puncher {
                         match p.punch_entry(entry) {
                             Ok(punched) if punched > 0 => {
+                                punched_bytes = punched;
                                 let _ = tracker.set_entry_reclaimed(&entry.name);
                             }
                             Ok(_) => {}
@@ -488,6 +570,36 @@ impl ExtractionEngine {
                     extracted_files += 1;
                     total_uncompressed_bytes += uncompressed_bytes;
                     sparse_bytes_saved += sparse_saved;
+
+                    let footprint_before_punch = initial_archive_phys.saturating_sub(current_reclaimed_bytes)
+                        + (current_extracted_bytes + uncompressed_bytes).saturating_sub(current_sparse_saved + sparse_saved);
+                    if footprint_before_punch > peak_disk_footprint {
+                        peak_disk_footprint = footprint_before_punch;
+                    }
+
+                    current_extracted_bytes += uncompressed_bytes;
+                    current_sparse_saved += sparse_saved;
+                    current_reclaimed_bytes += punched_bytes;
+
+                    if std::io::stdout().is_terminal() && !options.verbose {
+                        let pct = (i + 1) as f64 / inspection.entries.len() as f64 * 100.0;
+                        let elapsed_secs = start_time.elapsed().as_secs_f64();
+                        let newly_extracted = current_extracted_bytes.saturating_sub(already_extracted_bytes);
+                        let mb_s = if elapsed_secs > 0.0 {
+                            (newly_extracted as f64 / 1_048_576.0) / elapsed_secs
+                        } else {
+                            0.0
+                        };
+                        print!(
+                            "\rExtracting: [{}/{}] ({:>5.1}%) - {:.1} MB/s - Peak: {}",
+                            i + 1,
+                            inspection.entries.len(),
+                            pct,
+                            mb_s,
+                            crate::cli::inspect::format_bytes(peak_disk_footprint)
+                        );
+                        let _ = std::io::stdout().flush();
+                    }
                 }
                 Ok(WorkerResult::Directory { path }) => {
                     tracker.set_entry_extracted(&entry.name);
@@ -512,8 +624,19 @@ impl ExtractionEngine {
             }
         }
 
+        if std::io::stdout().is_terminal() && !options.verbose && !inspection.entries.is_empty() {
+            println!();
+        }
+
         let duration = start_time.elapsed();
-        let reclaimed_archive_bytes = puncher.as_ref().map(|p| p.total_reclaimed_bytes()).unwrap_or(0);
+        let secs = duration.as_secs_f64();
+        let newly_extracted = current_extracted_bytes.saturating_sub(already_extracted_bytes);
+        let throughput_mb_per_sec = if secs > 0.0 {
+            (newly_extracted as f64 / 1_048_576.0) / secs
+        } else {
+            0.0
+        };
+        let reclaimed_archive_bytes = already_reclaimed_bytes + puncher.as_ref().map(|p| p.total_reclaimed_bytes()).unwrap_or(0);
 
         Ok(ExtractionSummary {
             job_id: tracker.manifest.job_id.clone(),
@@ -527,6 +650,8 @@ impl ExtractionEngine {
             total_uncompressed_bytes,
             sparse_bytes_saved,
             reclaimed_archive_bytes,
+            peak_disk_footprint_bytes: peak_disk_footprint,
+            throughput_mb_per_sec,
             duration,
         })
     }

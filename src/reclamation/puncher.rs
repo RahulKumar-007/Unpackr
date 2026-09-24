@@ -22,15 +22,12 @@ pub fn compute_inward_reclaim_range(
     }
 
     let d_start = data_offset;
-    let d_end = match data_offset.checked_add(compressed_size) {
-        Some(val) => val,
-        None => return None,
-    };
+    let d_end = data_offset.checked_add(compressed_size)?;
 
     // Inward ceiling: (d_start + block_size - 1) / block_size * block_size
-    let r_start = match d_start.checked_add(block_size - 1) {
-        Some(val) => (val / block_size) * block_size,
-        None => return None,
+    let r_start = {
+        let val = d_start.checked_add(block_size - 1)?;
+        (val / block_size) * block_size
     };
 
     // Inward floor: (d_end / block_size) * block_size

@@ -47,10 +47,14 @@ fn main() -> Result<()> {
                 println!("Created Directories:  {}", summary.created_directories);
                 println!("Skipped Files:        {}", summary.skipped_files);
                 println!("Data Written:         {}", unpackr::cli::inspect::format_bytes(summary.total_uncompressed_bytes));
-                println!("Sparse Space Saved:   {}", unpackr::cli::inspect::format_bytes(summary.sparse_bytes_saved));
+                if summary.sparse_bytes_saved > 0 {
+                    println!("Sparse Space Saved:   {}", unpackr::cli::inspect::format_bytes(summary.sparse_bytes_saved));
+                }
                 if summary.reclaimed_archive_bytes > 0 {
                     println!("Archive Reclaimed:    {}", unpackr::cli::inspect::format_bytes(summary.reclaimed_archive_bytes));
                 }
+                println!("Peak Disk Footprint:  {}", unpackr::cli::inspect::format_bytes(summary.peak_disk_footprint_bytes));
+                println!("Throughput:           {:.1} MB/s", summary.throughput_mb_per_sec);
                 println!("Duration:             {:.2?}", summary.duration);
                 println!("================================================================================");
             }

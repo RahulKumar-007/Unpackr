@@ -3,6 +3,7 @@ use anyhow::Result;
 use crate::cli::inspect::format_bytes;
 use crate::extraction::{CollisionPolicy, ExtractionEngine, ResumeOptions};
 
+#[allow(clippy::too_many_arguments)]
 pub fn run_resume(
     target: &str,
     destination: Option<PathBuf>,
@@ -55,6 +56,8 @@ pub fn run_resume(
     if summary.reclaimed_archive_bytes > 0 {
         println!("Archive Reclaimed:    {}", format_bytes(summary.reclaimed_archive_bytes));
     }
+    println!("Peak Disk Footprint:  {}", format_bytes(summary.peak_disk_footprint_bytes));
+    println!("Throughput:           {:.1} MB/s", summary.throughput_mb_per_sec);
     println!("Duration:             {:.2?}", summary.duration);
     println!("================================================================================");
 
