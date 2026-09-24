@@ -1,10 +1,9 @@
+use std::io::IsTerminal;
 use anyhow::Result;
 use clap::Parser;
 use unpackr::cli::{Cli, Commands};
 
-fn main() -> Result<()> {
-    let cli = Cli::parse();
-
+fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Commands::Inspect { archive, json, limit } => {
             let limit_opt = if limit == 0 { None } else { Some(limit) };
@@ -116,7 +115,33 @@ fn main() -> Result<()> {
         } => {
             unpackr::cli::bench::run_bench(archive, entries, size_mb, json, cli.verbose)?;
         }
+        Commands::Completions { shell } => {
+            unpackr::cli::completions::run_completions(shell);
+        }
     }
 
     Ok(())
+}
+
+fn main() {
+    let cli = Cli::parse();
+
+    if let Err(err) = run(cli) {
+        if std::io::stderr().is_terminal() {
+            eprintln!("\x1b[1;31merror:\x1b[0m {}", err);
+            let mut source = err.source();
+            while let Some(s) = source {
+                eprintln!("  \x1b[1;33mcaused by:\x1b[0m {}", s);
+                source = s.source();
+            }
+        } else {
+            eprintln!("error: {}", err);
+            let mut source = err.source();
+            while let Some(s) = source {
+                eprintln!("  caused by: {}", s);
+                source = s.source();
+            }
+        }
+        std::process::exit(1);
+    }
 }

@@ -1,5 +1,6 @@
 pub mod bench;
 pub mod cancel;
+pub mod completions;
 pub mod inspect;
 pub mod resume;
 pub mod status;
@@ -32,6 +33,7 @@ pub struct Cli {
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     /// Inspect an archive and display detailed entry metadata and offsets without extracting
+    #[command(visible_alias = "i")]
     Inspect {
         /// Path to the target archive (.zip)
         archive: PathBuf,
@@ -46,6 +48,7 @@ pub enum Commands {
     },
 
     /// Extract an archive with streaming verification and low disk space usage
+    #[command(visible_alias = "x")]
     Extract {
         /// Path to the archive
         archive: PathBuf,
@@ -91,6 +94,7 @@ pub enum Commands {
     },
 
     /// Resume an interrupted extraction job
+    #[command(visible_alias = "r")]
     Resume {
         /// Job ID, destination directory, archive path, or manifest path
         target: String,
@@ -136,6 +140,7 @@ pub enum Commands {
     },
 
     /// Show current status and disk savings for a job
+    #[command(visible_alias = "s")]
     Status {
         /// Job ID, destination directory, or manifest path to inspect
         job_id: String,
@@ -146,6 +151,7 @@ pub enum Commands {
     },
 
     /// Verify an extracted destination against archive metadata
+    #[command(visible_alias = "v")]
     Verify {
         /// Job ID, destination directory, or manifest path to verify
         job_id: String,
@@ -156,6 +162,7 @@ pub enum Commands {
     },
 
     /// Cancel an interrupted or incomplete extraction job
+    #[command(visible_alias = "c")]
     Cancel {
         /// Job ID, destination directory, or manifest path to cancel
         job_id: String,
@@ -170,6 +177,7 @@ pub enum Commands {
     },
 
     /// Benchmark extraction performance and peak storage comparison on an archive
+    #[command(visible_alias = "b")]
     Bench {
         /// Optional path to an archive to benchmark (or omit to generate an automated test workload)
         archive: Option<PathBuf>,
@@ -185,5 +193,12 @@ pub enum Commands {
         /// Output benchmark results in JSON format
         #[arg(long)]
         json: bool,
+    },
+
+    /// Generate shell auto-completion scripts (bash, zsh, fish, elvish, powershell)
+    Completions {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
     },
 }

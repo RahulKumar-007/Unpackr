@@ -58,10 +58,16 @@ Total Disk Space Saved: ~48% reduction in peak footprint
      $$\text{PENDING} \longrightarrow \text{EXTRACTING} \longrightarrow \text{EXTRACTED} \longrightarrow \text{VERIFIED} \longrightarrow \text{RECLAIMED}$$
    - Intermediate files are staged in hidden files (`.<name>.unpackr_tmp_<pid>`) and atomically renamed upon CRC verification.
    - On crash recovery (`unpackr resume`), orphaned temporary files are automatically cleaned up, and already verified files are reconciled without re-extracting.
-8. **Security Hardened**:
-   - **Zip Slip Protection**: Canonicalization and lexical path inspection strictly prohibit directory traversal outside the target destination (e.g. `../../etc/passwd`).
-   - **Absolute & Null Byte Path Rejection**: Paths starting with `/` or containing `\0` are rejected immediately.
-   - **Compression Bomb Protection**: Configurable expansion ratio limits (default 100:1) protect against zip bombs.
+8. **Comprehensive Security Hardening**:
+   - **Zip Slip & Path Traversal Protection**: Lexical and canonical path sanitization strictly forbids directory traversal outside the target destination root (e.g. `../../etc/passwd`).
+   - **Symlink Directory Poisoning Defense**: Verifies that no ancestor directory along the extraction path is an existing symlink on disk, eliminating symlink swap/poisoning attacks.
+   - **Symlink Target Sanitization**: Resolves and validates all relative symlink targets to ensure they cannot escape the extraction destination root.
+   - **Internal Metadata Protection**: Forbids extraction of any entries containing `.unpackr` to prevent tampering with job manifests or write-ahead logs.
+   - **Windows Device & NTFS Stream Sanitization**: Rejects legacy DOS/Windows device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`) and NTFS Alternate Data Streams (`:`).
+   - **Privilege Escalation & Mode Neutralization**: Strips dangerous UNIX mode bits, including SUID (`0o4000`), SGID (`0o2000`), sticky (`0o1000`), and world-writable (`0o002`) bits.
+   - **Special Device Rejection**: Forbids extraction of FIFO named pipes (`S_IFIFO`), character devices (`S_IFCHR`), block devices (`S_IFBLK`), and sockets (`S_IFSOCK`).
+   - **Fifield Overlapping Offset Zip Bomb Detection**: Detects overlapping compressed data intervals across distinct entries (David Fifield multi-gigabyte zip bombs). In-place archive reclamation is strictly refused on overlapping archives to prevent corruptive hole punching.
+   - **Resource & Expansion DoS Limits**: Configurable boundaries for expansion ratio (`--max-ratio`), total unpacked size (`--max-total-size`), per-file size (`--max-file-size`), and maximum entry count (`--max-entries`).
 
 ---
 
@@ -83,11 +89,15 @@ The compiled binary will be located at `target/release/unpackr`.
 
 ## CLI Reference
 
-### 1. `inspect` — Inspect Archive Structure & Safety
+All subcommands have single-letter visible aliases for fast terminal usage:
+`i` (`inspect`), `x` (`extract`), `r` (`resume`), `s` (`status`), `v` (`verify`), `c` (`cancel`), `b` (`bench`).
+
+### 1. `inspect` (alias: `i`) — Inspect Archive Structure & Safety
 Inspects an archive's Central Directory, entry offsets, compression methods, and verifies security parameters without extracting.
 
 ```bash
 unpackr inspect <ARCHIVE> [--json]
+# or: unpackr i <ARCHIVE>
 ```
 
 Example output:
@@ -109,17 +119,21 @@ IDX   METHOD    COMPRESSED       UNCOMPRESSED     RATIO   CRC-32     NAME
 ...
 ```
 
-### 2. `extract` — Extract Archive with Optional Reclamation
+### 2. `extract` (alias: `x`) — Extract Archive with Optional Reclamation
 Extracts the archive to the specified destination.
 
 ```bash
 unpackr extract <ARCHIVE> <DESTINATION> [OPTIONS]
+# or: unpackr x <ARCHIVE> <DESTINATION> [OPTIONS]
 
 Options:
   -r, --reclaim-archive         Enable progressive in-place storage reclamation
   -c, --collision <POLICY>      Collision policy: fail (default), skip, overwrite, rename
   -s, --no-sparse               Disable sparse file zero-block detection
   -m, --max-ratio <FLOAT>       Maximum compression expansion ratio [default: 100.0]
+      --max-total-size <BYTES>  Maximum total uncompressed size limit in bytes
+      --max-file-size <BYTES>   Maximum uncompressed size limit for any single file
+      --max-entries <NUM>       Maximum number of entries allowed in archive
       --state-dir <PATH>        Custom directory for extraction state manifest
   -v, --verbose                 Verbose entry logging
   -j, --json                    Output summary in JSON format
@@ -128,6 +142,8 @@ Options:
 Example:
 ```bash
 unpackr extract archive.zip /destination --reclaim-archive
+# or using alias:
+unpackr x archive.zip /destination -r
 ```
 
 Live progress display:
@@ -156,11 +172,12 @@ Duration:             144.20s
 ================================================================================
 ```
 
-### 3. `resume` — Resume an Interrupted Extraction Job
+### 3. `resume` (alias: `r`) — Resume an Interrupted Extraction Job
 Resumes an extraction job that was interrupted or crashed due to power failure, SIGKILL, or system restart.
 
 ```bash
 unpackr resume <JOB_ID|TARGET_DIR|MANIFEST_PATH> [OPTIONS]
+# or: unpackr r <JOB_ID|TARGET_DIR|MANIFEST_PATH> [OPTIONS]
 
 Options:
   -d, --destination <PATH>      Override destination directory
@@ -169,6 +186,11 @@ Options:
       --verify                  Re-verify existing files on disk against manifest CRC-32
   -c, --collision <POLICY>      Collision policy override
   -r, --reclaim-archive         Enable in-place archive reclamation on resume
+  -s, --no-sparse               Disable sparse file zero-block detection
+  -m, --max-ratio <FLOAT>       Maximum compression expansion ratio
+      --max-total-size <BYTES>  Maximum total uncompressed size limit in bytes
+      --max-file-size <BYTES>   Maximum uncompressed size limit for any single file
+      --max-entries <NUM>       Maximum number of entries allowed in archive
   -v, --verbose                 Verbose logging
   -j, --json                    Output summary in JSON format
 ```
@@ -178,13 +200,16 @@ Example:
 unpackr resume large_dataset_4a7c88b9_1774411800 --reclaim-archive
 # or specify destination directory directly:
 unpackr resume /destination --reclaim-archive
+# or using alias:
+unpackr r /destination -r
 ```
 
-### 4. `status` — Check Real-Time Extraction Status
+### 4. `status` (alias: `s`) — Check Real-Time Extraction Status
 Reports detailed lifecycle progress for an ongoing or interrupted extraction job.
 
 ```bash
 unpackr status <JOB_ID|TARGET_DIR|MANIFEST_PATH> [--json]
+# or: unpackr s <JOB_ID|TARGET_DIR|MANIFEST_PATH>
 ```
 
 Example output:
@@ -205,25 +230,28 @@ State Breakdown:
 ================================================================================
 ```
 
-### 5. `verify` — Verify On-Disk File Integrity
+### 5. `verify` (alias: `v`) — Verify On-Disk File Integrity
 Audits all extracted files in the target directory against the manifest's recorded CRC-32 checksums and file sizes to detect any silent disk corruption or truncation.
 
 ```bash
 unpackr verify <JOB_ID|TARGET_DIR|MANIFEST_PATH> [--json]
+# or: unpackr v <JOB_ID|TARGET_DIR|MANIFEST_PATH>
 ```
 
-### 6. `cancel` — Safely Cancel Job & Clean Staging
+### 6. `cancel` (alias: `c`) — Safely Cancel Job & Clean Staging
 Cancels an active or interrupted extraction job and cleans up temporary staging files.
 
 ```bash
 unpackr cancel <JOB_ID|TARGET_DIR|MANIFEST_PATH> [--clean] [--json]
+# or: unpackr c <JOB_ID|TARGET_DIR|MANIFEST_PATH> --clean
 ```
 
-### 7. `bench` — Comparative Performance & Storage Benchmark
+### 7. `bench` (alias: `b`) — Comparative Performance & Storage Benchmark
 Runs automated side-by-side extraction benchmarks comparing Standard mode vs. Progressive In-Place Reclamation mode.
 
 ```bash
 unpackr bench [ARCHIVE] [OPTIONS]
+# or: unpackr b [ARCHIVE] [OPTIONS]
 
 Options:
       --entries <NUM>     Number of entries for synthetic workload [default: 4]
@@ -254,6 +282,42 @@ Source Storage Freed     0 B                  3.98 MB (4177920 B)  Reclaimed in-
 ```
 
 When supplied with a user archive (`unpackr bench my_archive.zip`), Unpackr stages an isolated working copy so the user's original archive is **never touched or modified**, providing safe real-world capacity analysis.
+
+### 8. `completions` — Generate Shell Autocompletion Scripts
+Generates tab-completion scripts for major terminal shells (`bash`, `zsh`, `fish`, `elvish`, `powershell`).
+
+```bash
+unpackr completions <SHELL>
+```
+
+#### Shell Installation Examples:
+
+- **Bash**:
+  ```bash
+  source <(unpackr completions bash)
+  # Or save system-wide:
+  unpackr completions bash | sudo tee /etc/bash_completion.d/unpackr > /dev/null
+  ```
+
+- **Zsh**:
+  ```bash
+  mkdir -p ~/.zfunc
+  unpackr completions zsh > ~/.zfunc/_unpackr
+  # Add to your ~/.zshrc (before compinit):
+  #   fpath=(~/.zfunc $fpath)
+  #   autoload -U compinit && compinit
+  ```
+
+- **Fish**:
+  ```bash
+  mkdir -p ~/.config/fish/completions
+  unpackr completions fish > ~/.config/fish/completions/unpackr.fish
+  ```
+
+- **PowerShell**:
+  ```powershell
+  unpackr completions powershell | Out-String | Invoke-Expression
+  ```
 
 ---
 
@@ -316,7 +380,7 @@ On `unpackr resume`, the engine verifies:
 
 ## Testing & Quality Assurance
 
-Unpackr includes comprehensive test suites spanning unit, integration, high-scale stress, and micro-benchmarking harnesses:
+Unpackr includes comprehensive test suites spanning unit, integration, security hardening, high-scale stress, and micro-benchmarking harnesses (57 tests passing 100%):
 
 ### 1. Integration & Unit Test Suite (34 tests)
 - **Streaming decompression accuracy** (`Stored`, `Deflated`, zero-byte files, multi-megabyte streams).
@@ -329,10 +393,26 @@ Unpackr includes comprehensive test suites spanning unit, integration, high-scal
 - **End-to-end benchmark comparison suite**.
 
 ```bash
-cargo test
+cargo test --lib --test integration_test
 ```
 
-### 2. High-Scale Stress Testing Suite (`tests/stress_test.rs`)
+### 2. Dedicated Security Hardening Test Suite (`tests/security_test.rs` — 10 tests)
+- `test_security_zip_slip_and_absolute_paths`: Rejection of path traversal (`../`) and absolute paths (`/etc/passwd`).
+- `test_security_null_byte_injection`: Rejection of paths containing embedded null bytes (`\0`).
+- `test_security_unpackr_reserved_directory`: Forbids extracting entries targeting internal `.unpackr` metadata or logs.
+- `test_security_windows_reserved_device_names`: Rejection of DOS/Windows device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`) with or without file extensions.
+- `test_security_ntfs_alternate_data_streams`: Rejection of NTFS alternate data stream markers (`:`).
+- `test_security_unix_permissions_sanitization`: Verifies SUID (`0o4000`), SGID (`0o2000`), sticky (`0o1000`), and world-writable (`0o002`) bits are neutralized.
+- `test_security_forbidden_device_types`: Detects and rejects synthetic archive entries specifying FIFO pipes, character devices, block devices, or sockets.
+- `test_security_symlink_directory_traversal`: Traversal detection through pre-existing symlinks pointing outside target destination root.
+- `test_security_overlapping_offsets_fifield_zip_bomb`: Detects overlapping compressed data intervals and enforces refusal of `--reclaim-archive` to prevent archive corruption.
+- `test_security_resource_limits`: Enforces strict abortion on exceeding `--max-entries`, `--max-file-size`, or `--max-total-size`.
+
+```bash
+cargo test --test security_test
+```
+
+### 3. High-Scale Stress Testing Suite (`tests/stress_test.rs` — 4 tests)
 - `test_thousand_entries_deep_hierarchy_stress`: 1,000 entries across 200 deeply nested directories and 800 files of variable sizes extracted under `--reclaim-archive`. Verifies zero file descriptor leaks, complete state tracking, and 100% byte integrity.
 - `test_mixed_compression_and_sparsity_stress`: Stored, Deflated, and highly sparse (4 MB zero run) files. Verifies `sparse_bytes_saved >= 4MB` and `reclaimed_archive_bytes > 0`.
 - `test_repeated_rolling_crash_recovery_stress`: In-place hole punched archive with simulated mid-stream crash on entry 10, orphan temporary file cleanup, and atomic resume.
@@ -342,7 +422,7 @@ cargo test
 cargo test --test stress_test
 ```
 
-### 3. Criterion Micro-Benchmarking Suite (`benches/engine_bench.rs`)
+### 4. Criterion Micro-Benchmarking Suite (`benches/engine_bench.rs`)
 Micro-benchmarks measuring performance and throughput of core internal primitives:
 - `compute_inward_reclaim_range` (aligned, unaligned, sub-block boundaries).
 - `sanitize_entry_path` and `resolve_safe_dest` (security lexical validation).
@@ -353,9 +433,13 @@ Micro-benchmarks measuring performance and throughput of core internal primitive
 cargo bench --bench engine_bench
 ```
 
-### 4. Code Quality & Linting
+### 5. Running All Tests & Lints
 ```bash
-cargo clippy --all-targets
+# Run all 57 tests
+cargo test --all-targets
+
+# Run linter
+cargo clippy --all-targets -- -D warnings
 ```
 
 ---
