@@ -29,6 +29,7 @@ fn main() -> Result<()> {
                 reclaim_archive,
                 state_dir,
                 verbose: cli.verbose,
+                quiet: cli.quiet || json,
             };
 
             let summary = unpackr::extraction::ExtractionEngine::extract(&archive, &options)?;
@@ -79,6 +80,7 @@ fn main() -> Result<()> {
                 reclaim_archive,
                 json,
                 cli.verbose,
+                cli.quiet,
             )?;
         }
         Commands::Status { job_id, json } => {
@@ -93,6 +95,14 @@ fn main() -> Result<()> {
             json,
         } => {
             unpackr::cli::cancel::run_cancel(&job_id, clean, json)?;
+        }
+        Commands::Bench {
+            archive,
+            entries,
+            size_mb,
+            json,
+        } => {
+            unpackr::cli::bench::run_bench(archive, entries, size_mb, json, cli.verbose)?;
         }
     }
 

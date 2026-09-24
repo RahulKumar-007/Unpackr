@@ -14,6 +14,7 @@ pub fn run_resume(
     reclaim_archive: bool,
     json: bool,
     verbose: bool,
+    quiet: bool,
 ) -> Result<()> {
     let collision_policy = collision
         .as_deref()
@@ -29,6 +30,7 @@ pub fn run_resume(
         max_compression_ratio: 100.0,
         reclaim_archive,
         verbose,
+        quiet: quiet || json,
     };
 
     let summary = ExtractionEngine::resume(target, &options)?;

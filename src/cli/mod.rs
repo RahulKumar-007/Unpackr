@@ -1,3 +1,4 @@
+pub mod bench;
 pub mod cancel;
 pub mod inspect;
 pub mod resume;
@@ -22,6 +23,10 @@ pub struct Cli {
     /// Verbose logging output
     #[arg(short, long, global = true)]
     pub verbose: bool,
+
+    /// Suppress progress bar output
+    #[arg(short, long, global = true)]
+    pub quiet: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -136,6 +141,24 @@ pub enum Commands {
         clean: bool,
 
         /// Output cancellation result in JSON format
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Benchmark extraction performance and peak storage comparison on an archive
+    Bench {
+        /// Optional path to an archive to benchmark (or omit to generate an automated test workload)
+        archive: Option<PathBuf>,
+
+        /// Number of entries if generating a synthetic benchmark workload (default: 10)
+        #[arg(long, default_value = "10")]
+        entries: usize,
+
+        /// Entry size in megabytes if generating a synthetic workload (default: 4)
+        #[arg(long, default_value = "4")]
+        size_mb: usize,
+
+        /// Output benchmark results in JSON format
         #[arg(long)]
         json: bool,
     },

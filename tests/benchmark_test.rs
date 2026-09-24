@@ -61,6 +61,7 @@ fn test_benchmark_peak_storage_reclamation_vs_standard() {
         reclaim_archive: false,
         state_dir: None,
         verbose: false,
+        quiet: false,
     };
     let summary_std = ExtractionEngine::extract(&archive_std_path, &options_std)
         .expect("Standard extraction failed");
@@ -75,6 +76,7 @@ fn test_benchmark_peak_storage_reclamation_vs_standard() {
         reclaim_archive: true,
         state_dir: None,
         verbose: false,
+        quiet: false,
     };
     let summary_rec = ExtractionEngine::extract(&archive_rec_path, &options_rec)
         .expect("Reclaim extraction failed");
@@ -166,6 +168,7 @@ fn test_benchmark_interrupted_reclaim_and_resume_peak_storage() {
         reclaim_archive: true,
         state_dir: None,
         verbose: false,
+        quiet: false,
     };
 
     let summary = ExtractionEngine::extract(&archive_path, &options).unwrap();
@@ -182,6 +185,7 @@ fn test_benchmark_interrupted_reclaim_and_resume_peak_storage() {
         max_compression_ratio: 100.0,
         reclaim_archive: true,
         verbose: false,
+        quiet: false,
     };
 
     let resume_summary = ExtractionEngine::resume(&summary.job_id, &resume_options)

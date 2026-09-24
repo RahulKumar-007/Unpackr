@@ -22,6 +22,7 @@ pub struct ExtractionOptions {
     pub reclaim_archive: bool,
     pub state_dir: Option<PathBuf>,
     pub verbose: bool,
+    pub quiet: bool,
 }
 
 impl Default for ExtractionOptions {
@@ -34,6 +35,7 @@ impl Default for ExtractionOptions {
             reclaim_archive: false,
             state_dir: None,
             verbose: false,
+            quiet: false,
         }
     }
 }
@@ -49,6 +51,7 @@ pub struct ResumeOptions {
     pub max_compression_ratio: f64,
     pub reclaim_archive: bool,
     pub verbose: bool,
+    pub quiet: bool,
 }
 
 impl Default for ResumeOptions {
@@ -63,6 +66,7 @@ impl Default for ResumeOptions {
             max_compression_ratio: 100.0,
             reclaim_archive: false,
             verbose: false,
+            quiet: false,
         }
     }
 }
@@ -280,7 +284,7 @@ impl ExtractionEngine {
                     current_sparse_saved += sparse_saved;
                     current_reclaimed_bytes += punched_bytes;
 
-                    if std::io::stdout().is_terminal() && !options.verbose {
+                    if std::io::stderr().is_terminal() && !options.verbose && !options.quiet {
                         let pct = (i + 1) as f64 / inspection.entries.len() as f64 * 100.0;
                         let elapsed_secs = start_time.elapsed().as_secs_f64();
                         let mb_s = if elapsed_secs > 0.0 {
@@ -288,7 +292,7 @@ impl ExtractionEngine {
                         } else {
                             0.0
                         };
-                        print!(
+                        eprint!(
                             "\rExtracting: [{}/{}] ({:>5.1}%) - {:.1} MB/s - Peak: {}",
                             i + 1,
                             inspection.entries.len(),
@@ -296,7 +300,7 @@ impl ExtractionEngine {
                             mb_s,
                             crate::cli::inspect::format_bytes(peak_disk_footprint)
                         );
-                        let _ = std::io::stdout().flush();
+                        let _ = std::io::stderr().flush();
                     }
                 }
                 Ok(WorkerResult::Directory { path }) => {
@@ -322,8 +326,8 @@ impl ExtractionEngine {
             }
         }
 
-        if std::io::stdout().is_terminal() && !options.verbose && !inspection.entries.is_empty() {
-            println!();
+        if std::io::stderr().is_terminal() && !options.verbose && !options.quiet && !inspection.entries.is_empty() {
+            eprintln!();
         }
 
         let duration = start_time.elapsed();
@@ -581,7 +585,7 @@ impl ExtractionEngine {
                     current_sparse_saved += sparse_saved;
                     current_reclaimed_bytes += punched_bytes;
 
-                    if std::io::stdout().is_terminal() && !options.verbose {
+                    if std::io::stderr().is_terminal() && !options.verbose && !options.quiet {
                         let pct = (i + 1) as f64 / inspection.entries.len() as f64 * 100.0;
                         let elapsed_secs = start_time.elapsed().as_secs_f64();
                         let newly_extracted = current_extracted_bytes.saturating_sub(already_extracted_bytes);
@@ -590,7 +594,7 @@ impl ExtractionEngine {
                         } else {
                             0.0
                         };
-                        print!(
+                        eprint!(
                             "\rExtracting: [{}/{}] ({:>5.1}%) - {:.1} MB/s - Peak: {}",
                             i + 1,
                             inspection.entries.len(),
@@ -598,7 +602,7 @@ impl ExtractionEngine {
                             mb_s,
                             crate::cli::inspect::format_bytes(peak_disk_footprint)
                         );
-                        let _ = std::io::stdout().flush();
+                        let _ = std::io::stderr().flush();
                     }
                 }
                 Ok(WorkerResult::Directory { path }) => {
@@ -624,8 +628,8 @@ impl ExtractionEngine {
             }
         }
 
-        if std::io::stdout().is_terminal() && !options.verbose && !inspection.entries.is_empty() {
-            println!();
+        if std::io::stderr().is_terminal() && !options.verbose && !options.quiet && !inspection.entries.is_empty() {
+            eprintln!();
         }
 
         let duration = start_time.elapsed();

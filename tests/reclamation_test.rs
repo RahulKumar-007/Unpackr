@@ -70,6 +70,7 @@ fn test_physical_disk_space_reclamation() {
         reclaim_archive: true, // Enable in-place reclamation
         state_dir: None,
         verbose: true,
+        quiet: false,
     };
 
     let summary = ExtractionEngine::extract(&archive_path, &options).expect("Extraction with reclamation failed");
@@ -141,6 +142,7 @@ fn test_default_mode_does_not_modify_read_only_archive() {
         reclaim_archive: false, // Default: read-only
         state_dir: None,
         verbose: false,
+        quiet: false,
     };
 
     let summary = ExtractionEngine::extract(&archive_path, &options).expect("Read-only extraction failed");
@@ -180,6 +182,7 @@ fn test_sub_block_entries_reclaim_safely_without_holes() {
         reclaim_archive: true, // Even with reclaim requested, sub-block entries cannot be punched
         state_dir: None,
         verbose: false,
+        quiet: false,
     };
 
     let summary = ExtractionEngine::extract(&archive_path, &options).unwrap();

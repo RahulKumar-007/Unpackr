@@ -39,6 +39,7 @@ fn test_crash_recovery_cleans_orphaned_tmp_and_resumes() {
         reclaim_archive: false,
         state_dir: None,
         verbose: false,
+        quiet: false,
     };
 
     // Run extraction once to create base manifest
@@ -78,6 +79,7 @@ fn test_crash_recovery_cleans_orphaned_tmp_and_resumes() {
         max_compression_ratio: 100.0,
         reclaim_archive: false,
         verbose: true,
+        quiet: false,
     };
 
     let summary = ExtractionEngine::resume(
@@ -118,6 +120,7 @@ fn test_crash_recovery_recovers_already_written_file() {
         reclaim_archive: false,
         state_dir: None,
         verbose: false,
+        quiet: false,
     };
 
     // Extract all
@@ -155,6 +158,7 @@ fn test_resume_rejects_tampered_source_archive() {
         reclaim_archive: false,
         state_dir: None,
         verbose: false,
+        quiet: false,
     };
 
     ExtractionEngine::extract(&archive_path, &options).unwrap();
@@ -188,6 +192,7 @@ fn test_resume_detects_and_reextracts_deleted_verified_file() {
         reclaim_archive: false,
         state_dir: None,
         verbose: false,
+        quiet: false,
     };
 
     ExtractionEngine::extract(&archive_path, &options).unwrap();

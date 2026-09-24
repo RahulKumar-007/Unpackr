@@ -219,6 +219,42 @@ Cancels an active or interrupted extraction job and cleans up temporary staging 
 unpackr cancel <JOB_ID|TARGET_DIR|MANIFEST_PATH> [--clean] [--json]
 ```
 
+### 7. `bench` — Comparative Performance & Storage Benchmark
+Runs automated side-by-side extraction benchmarks comparing Standard mode vs. Progressive In-Place Reclamation mode.
+
+```bash
+unpackr bench [ARCHIVE] [OPTIONS]
+
+Options:
+      --entries <NUM>     Number of entries for synthetic workload [default: 4]
+      --size-mb <MB>      Size per entry in MB for synthetic workload [default: 1]
+  -j, --json              Output benchmark report in JSON format
+  -q, --quiet             Suppress interactive progress telemetry
+  -v, --verbose           Enable verbose engine logging
+```
+
+When run without arguments, `unpackr bench` generates a synthetic benchmark archive, runs both modes in isolated temporary environments, validates 100% byte-for-byte fidelity of all extracted outputs, and renders a side-by-side comparative table:
+
+```text
+================================================================================
+                           UNPACKR BENCHMARK REPORT                             
+================================================================================
+Workload:               Synthetic Workload (4 entries x 1 MB = 4 MB total)
+Extracted Files:        4
+Total Data Size:        4.00 MB (4194304 B)
+Integrity Check:        PASSED (100% byte-for-byte fidelity)
+--------------------------------------------------------------------------------
+Metric                   Standard Mode        Reclaim Mode         Improvement     
+--------------------------------------------------------------------------------
+Peak Disk Footprint      8.00 MB (8392704 B)  5.02 MB (5259264 B)  -37.3% (-2.99 MB (3133440 B))
+Extraction Duration      0.04s                0.04s                -0.00s          
+Decompress Throughput    104.3 MB/s           110.1 MB/s           Optimal         
+Source Storage Freed     0 B                  3.98 MB (4177920 B)  Reclaimed in-place
+================================================================================
+```
+
+When supplied with a user archive (`unpackr bench my_archive.zip`), Unpackr stages an isolated working copy so the user's original archive is **never touched or modified**, providing safe real-world capacity analysis.
+
 ---
 
 ## Benchmarks & Peak Storage Evaluation
@@ -280,8 +316,10 @@ On `unpackr resume`, the engine verifies:
 
 ## Testing & Quality Assurance
 
-Unpackr includes 34 automated unit and integration tests covering:
-- **Streaming decompression accuracy** (Deflated, Stored, zero-byte files, multi-megabyte streams).
+Unpackr includes comprehensive test suites spanning unit, integration, high-scale stress, and micro-benchmarking harnesses:
+
+### 1. Integration & Unit Test Suite (34 tests)
+- **Streaming decompression accuracy** (`Stored`, `Deflated`, zero-byte files, multi-megabyte streams).
 - **Physical hole punching** verified against true filesystem block allocation (`stat.st_blocks * 512`).
 - **Zip Slip directory traversal attacks**, symlink escapes, and null-byte injection.
 - **Compression bomb expansion limits**.
@@ -290,12 +328,32 @@ Unpackr includes 34 automated unit and integration tests covering:
 - **Sparse file zero-block detection**.
 - **End-to-end benchmark comparison suite**.
 
-Run the test suite:
 ```bash
 cargo test
 ```
 
-Run clippy linter:
+### 2. High-Scale Stress Testing Suite (`tests/stress_test.rs`)
+- `test_thousand_entries_deep_hierarchy_stress`: 1,000 entries across 200 deeply nested directories and 800 files of variable sizes extracted under `--reclaim-archive`. Verifies zero file descriptor leaks, complete state tracking, and 100% byte integrity.
+- `test_mixed_compression_and_sparsity_stress`: Stored, Deflated, and highly sparse (4 MB zero run) files. Verifies `sparse_bytes_saved >= 4MB` and `reclaimed_archive_bytes > 0`.
+- `test_repeated_rolling_crash_recovery_stress`: In-place hole punched archive with simulated mid-stream crash on entry 10, orphan temporary file cleanup, and atomic resume.
+- `test_memory_bounded_streaming_stress`: 25 MB stream extraction with `max_compression_ratio: 2000.0` validating streaming throughput without buffer bloat.
+
+```bash
+cargo test --test stress_test
+```
+
+### 3. Criterion Micro-Benchmarking Suite (`benches/engine_bench.rs`)
+Micro-benchmarks measuring performance and throughput of core internal primitives:
+- `compute_inward_reclaim_range` (aligned, unaligned, sub-block boundaries).
+- `sanitize_entry_path` and `resolve_safe_dest` (security lexical validation).
+- `SparseWriter` zero-chunk detection and buffer bypass.
+- `compute_archive_identity` (BLAKE3 header and trailer hashing).
+
+```bash
+cargo bench --bench engine_bench
+```
+
+### 4. Code Quality & Linting
 ```bash
 cargo clippy --all-targets
 ```
