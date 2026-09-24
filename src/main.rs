@@ -52,8 +52,25 @@ fn main() -> Result<()> {
                 println!("================================================================================");
             }
         }
-        Commands::Resume { job_id } => {
-            println!("Resume command scheduled for Phase 4 implementation (Job ID: {}).", job_id);
+        Commands::Resume {
+            target,
+            destination,
+            archive,
+            retry_failed,
+            verify,
+            collision,
+            json,
+        } => {
+            unpackr::cli::resume::run_resume(
+                &target,
+                destination,
+                archive,
+                retry_failed,
+                verify,
+                collision,
+                json,
+                cli.verbose,
+            )?;
         }
         Commands::Status { job_id, json } => {
             unpackr::cli::status::run_status(&job_id, json)?;
@@ -61,8 +78,12 @@ fn main() -> Result<()> {
         Commands::Verify { job_id, json } => {
             unpackr::cli::verify::run_verify(&job_id, json)?;
         }
-        Commands::Cancel { job_id } => {
-            println!("Cancel command scheduled for Phase 4 implementation (Job ID: {}).", job_id);
+        Commands::Cancel {
+            job_id,
+            clean,
+            json,
+        } => {
+            unpackr::cli::cancel::run_cancel(&job_id, clean, json)?;
         }
     }
 

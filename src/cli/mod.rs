@@ -1,4 +1,6 @@
+pub mod cancel;
 pub mod inspect;
+pub mod resume;
 pub mod status;
 pub mod verify;
 
@@ -73,8 +75,31 @@ pub enum Commands {
 
     /// Resume an interrupted extraction job
     Resume {
-        /// Job ID or archive path to resume
-        job_id: String,
+        /// Job ID, destination directory, archive path, or manifest path
+        target: String,
+
+        /// Optional destination directory (if first argument is an archive)
+        destination: Option<PathBuf>,
+
+        /// Explicit path to archive if moved or not found in manifest
+        #[arg(short, long)]
+        archive: Option<PathBuf>,
+
+        /// Retry entries that previously failed
+        #[arg(long)]
+        retry_failed: bool,
+
+        /// Fully verify already extracted files before resuming
+        #[arg(long)]
+        verify: bool,
+
+        /// Collision policy: fail, skip, overwrite, rename
+        #[arg(long)]
+        collision: Option<String>,
+
+        /// Output resume summary in JSON format
+        #[arg(long)]
+        json: bool,
     },
 
     /// Show current status and disk savings for a job
@@ -97,9 +122,17 @@ pub enum Commands {
         json: bool,
     },
 
-    /// Cancel a running job and clean up temporary state
+    /// Cancel an interrupted or incomplete extraction job
     Cancel {
-        /// Job ID to cancel
+        /// Job ID, destination directory, or manifest path to cancel
         job_id: String,
+
+        /// Clean up and remove extracted files and destination directory
+        #[arg(long)]
+        clean: bool,
+
+        /// Output cancellation result in JSON format
+        #[arg(long)]
+        json: bool,
     },
 }

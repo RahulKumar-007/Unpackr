@@ -53,11 +53,11 @@ pub fn find_manifest_file(job_id_or_path: &str) -> Option<PathBuf> {
 
     // 2. Direct path to a directory containing manifest.json or .unpackr/manifest.json
     if direct_path.is_dir() {
-        let m1 = direct_path.join("manifest.json");
+        let m1 = direct_path.join(".unpackr").join("manifest.json");
         if m1.is_file() {
             return Some(m1);
         }
-        let m2 = direct_path.join(".unpackr").join("manifest.json");
+        let m2 = direct_path.join("manifest.json");
         if m2.is_file() {
             return Some(m2);
         }
@@ -73,3 +73,26 @@ pub fn find_manifest_file(job_id_or_path: &str) -> Option<PathBuf> {
 
     None
 }
+
+/// Locates a manifest file given a target (job ID, path, or archive) and optional destination directory.
+pub fn find_manifest_for_job(target: &str, destination: Option<&Path>) -> Option<PathBuf> {
+    // 1. If explicit destination is provided, check there first
+    if let Some(dest) = destination {
+        let m1 = dest.join(".unpackr").join("manifest.json");
+        if m1.is_file() {
+            return Some(m1);
+        }
+        let m2 = dest.join("manifest.json");
+        if m2.is_file() {
+            return Some(m2);
+        }
+    }
+
+    // 2. Check target directly (path, directory, or job ID)
+    if let Some(path) = find_manifest_file(target) {
+        return Some(path);
+    }
+
+    None
+}
+
