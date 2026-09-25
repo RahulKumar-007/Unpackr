@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.rahulkumar007.Unpackr</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT OR Apache-2.0</project_license>
+  <name>Unpackr</name>
+  <summary>Low-disk-space archive extraction engine and native GUI</summary>
+  <description>
+    <p>
+      Unpackr is a production-quality, low-disk-space archive extraction engine and native desktop GUI.
+      It eliminates the classic 2x disk capacity requirement when extracting large archives by
+      progressively punching physical filesystem holes in already-decompressed archive blocks in-place.
+    </p>
+    <p>
+      Features:
+    </p>
+    <ul>
+      <li>In-place physical block reclamation using fallocate (FALLOC_FL_PUNCH_HOLE)</li>
+      <li>Robust crash recovery and resumable extractions with transactional manifest tracking</li>
+      <li>Path traversal (Zip Slip) immunity, symlink poisoning detection, and resource limit sandboxing</li>
+      <li>Zero-copy sparse streaming hole restoration for sparse payloads</li>
+      <li>Modern native desktop GUI powered by egui/eframe with real-time speed, ETA, and progress charts</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">io.github.rahulkumar007.Unpackr.desktop</launchable>
+  <url type="homepage">https://github.com/RahulKumar-007/Unpackr</url>
+  <url type="bugtracker">https://github.com/RahulKumar-007/Unpackr/issues</url>
+  <url type="vcs-browser">https://github.com/RahulKumar-007/Unpackr</url>
+  <developer id="io.github.rahulkumar007">
+    <name>Rahul Kumar</name>
+  </developer>
+  <categories>
+    <category>Utility</category>
+    <category>Archiving</category>
+    <category>Compression</category>
+    <category>System</category>
+  </categories>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-09-25">
+      <description>
+        <p>Initial production-grade release of Unpackr:</p>
+        <ul>
+          <li>Native desktop GUI with real-time progressive extraction metrics</li>
+          <li>Low-disk space progressive archive reclamation engine</li>
+          <li>Transactional crash recovery and jobs management</li>
+        </ul>
+      </description>
+    </release>
+  </releases>
+</component>

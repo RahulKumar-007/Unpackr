@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Unpackr
+Comment=Low-disk-space archive extraction engine and native GUI
+Exec=unpackr %F
+Icon=io.github.rahulkumar007.Unpackr
+Terminal=false
+Type=Application
+Categories=Utility;Archiving;Compression;
+MimeType=application/zip;application/x-zip;application/x-zip-compressed;
+StartupNotify=true
+StartupWMClass=unpackr

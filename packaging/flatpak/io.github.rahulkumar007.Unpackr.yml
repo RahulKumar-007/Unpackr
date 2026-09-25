@@ -1,0 +1,34 @@
+app-id: io.github.rahulkumar007.Unpackr
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+command: unpackr
+
+finish-args:
+  # Rendering displays
+  - --share=ipc
+  - --socket=fallback-x11
+  - --socket=wayland
+  # Hardware accelerated graphics
+  - --device=dri
+  # Filesystem access to read archives and write extracted files
+  - --filesystem=host
+
+modules:
+  - name: unpackr
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 unpackr /app/bin/unpackr
+      - install -Dm644 io.github.rahulkumar007.Unpackr.desktop /app/share/applications/io.github.rahulkumar007.Unpackr.desktop
+      - install -Dm644 io.github.rahulkumar007.Unpackr.svg /app/share/icons/hicolor/scalable/apps/io.github.rahulkumar007.Unpackr.svg
+      - install -Dm644 io.github.rahulkumar007.Unpackr.metainfo.xml /app/share/metainfo/io.github.rahulkumar007.Unpackr.metainfo.xml
+    sources:
+      - type: archive
+        url: https://github.com/RahulKumar-007/Unpackr/releases/download/v0.1.0/unpackr-v0.1.0-x86_64-unknown-linux-gnu.tar.gz
+        sha256: 5bc3cec2b165cff279af0566e1bf5b0a05a9019fae939439072e11677ab27695
+      - type: file
+        path: io.github.rahulkumar007.Unpackr.desktop
+      - type: file
+        path: io.github.rahulkumar007.Unpackr.svg
+      - type: file
+        path: io.github.rahulkumar007.Unpackr.metainfo.xml

@@ -77,16 +77,17 @@ jobs:
           mkdir -p dist
           mv "${ARCHIVE_NAME}.tar.gz" dist/
 
-      - name: Build Debian and RPM packages
+      - name: Build Debian, RPM, and AppImage packages
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         shell: bash
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
           VERSION="${TAG#v}"
-          chmod +x packaging/build_deb.sh packaging/build_rpm.sh
+          chmod +x packaging/build_deb.sh packaging/build_rpm.sh packaging/build_appimage.sh
           BIN_SOURCE="target/${{ matrix.target }}/release/unpackr" VERSION="${VERSION}" ./packaging/build_deb.sh
           cargo install cargo-generate-rpm --locked
           BIN_SOURCE="target/${{ matrix.target }}/release/unpackr" ./packaging/build_rpm.sh
+          BIN_SOURCE="target/${{ matrix.target }}/release/unpackr" VERSION="${VERSION}" ./packaging/build_appimage.sh
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -96,6 +97,7 @@ jobs:
             dist/*.tar.gz
             dist/*.deb
             dist/*.rpm
+            dist/*.AppImage
 
   publish-release:
     name: Publish GitHub Release
@@ -114,9 +116,9 @@ jobs:
       - name: Generate Checksums
         run: |
           mkdir -p release-assets
-          cp all-dist/*.tar.gz all-dist/*.deb all-dist/*.rpm release-assets/ 2>/dev/null || cp all-dist/* release-assets/
+          cp all-dist/*.tar.gz all-dist/*.deb all-dist/*.rpm all-dist/*.AppImage release-assets/ 2>/dev/null || cp all-dist/* release-assets/
           cd release-assets
-          sha256sum *.tar.gz *.deb *.rpm > SHA256SUMS.txt 2>/dev/null || sha256sum * > SHA256SUMS.txt
+          sha256sum *.tar.gz *.deb *.rpm *.AppImage > SHA256SUMS.txt 2>/dev/null || sha256sum * > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
       - name: Create GitHub Release

@@ -42,26 +42,34 @@ $$\text{Unpackr Peak} = \max_t \Big( (\text{Archive}_{\text{initial}} - \text{Re
 
 ## Quick Start & Installation
 
-### 1. Pre-built Binaries (GitHub Releases)
+### 1. Pre-built Binaries & Packages (GitHub Releases)
 Download pre-compiled packages from the **[Releases](https://github.com/RahulKumar-007/Unpackr/releases)** page:
+- **`unpackr-v0.1.0-x86_64.AppImage`**: Single-file portable Linux executable (GUI + CLI; double-click to run).
 - **`unpackr_0.1.0_amd64.deb`**: Debian/Ubuntu package with desktop entry, icons, and shell completions.
 - **`unpackr-0.1.0-1.x86_64.rpm`**: Fedora/RHEL package with desktop entry, icons, and shell completions.
 - **`unpackr-v0.1.0-x86_64-unknown-linux-gnu.tar.gz`**: Full build with both CLI and the native desktop GUI.
 - **`unpackr-cli-v0.1.0-x86_64-unknown-linux-musl.tar.gz`**: Headless static CLI binary (zero dynamic dependencies; runs anywhere including minimal Docker containers and Alpine Linux).
 
-### 2. Debian / Ubuntu
+### 2. AppImage (Portable Single-File)
+```bash
+wget https://github.com/RahulKumar-007/Unpackr/releases/download/v0.1.0/unpackr-v0.1.0-x86_64.AppImage
+chmod +x unpackr-v0.1.0-x86_64.AppImage
+./unpackr-v0.1.0-x86_64.AppImage
+```
+
+### 3. Debian / Ubuntu
 ```bash
 wget https://github.com/RahulKumar-007/Unpackr/releases/download/v0.1.0/unpackr_0.1.0_amd64.deb
 sudo dpkg -i unpackr_0.1.0_amd64.deb
 ```
 
-### 3. Fedora / RHEL / openSUSE
+### 4. Fedora / RHEL / openSUSE
 ```bash
 wget https://github.com/RahulKumar-007/Unpackr/releases/download/v0.1.0/unpackr-0.1.0-1.x86_64.rpm
 sudo dnf install ./unpackr-0.1.0-1.x86_64.rpm
 ```
 
-### 4. Arch Linux (AUR)
+### 5. Arch Linux (AUR)
 ```bash
 # Using yay:
 yay -S unpackr-bin
@@ -70,13 +78,20 @@ yay -S unpackr-bin
 git clone https://aur.archlinux.org/unpackr-bin.git && cd unpackr-bin && makepkg -si
 ```
 
-### 4. Homebrew (macOS & Linux)
+### 6. Homebrew (macOS & Linux)
 ```bash
 brew tap RahulKumar-007/tap
 brew install unpackr
 ```
 
-### 5. From Crates.io
+### 7. Flatpak (Flathub)
+```bash
+# Build locally with flatpak-builder:
+./packaging/flatpak/build_flatpak.sh
+```
+*(See [`packaging/flatpak/README.md`](packaging/flatpak/README.md) for Flathub submission instructions)*
+
+### 8. From Crates.io
 ```bash
 # Fast binary download via cargo-binstall:
 cargo binstall unpackr
@@ -85,7 +100,7 @@ cargo binstall unpackr
 cargo install unpackr
 ```
 
-### 6. Launching
+### 9. Launching
 
 ```bash
 # 1. Native Desktop GUI (default when launched with no arguments)
