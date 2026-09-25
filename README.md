@@ -43,11 +43,33 @@ $$\text{Unpackr Peak} = \max_t \Big( (\text{Archive}_{\text{initial}} - \text{Re
 ## Quick Start & Installation
 
 ### 1. Pre-built Binaries (GitHub Releases)
-Download pre-compiled binaries from the **[Releases](https://github.com/RahulKumar-007/Unpackr/releases)** page:
-- **`unpackr-...-x86_64-unknown-linux-gnu.tar.gz`**: Full build with both CLI and the native desktop GUI.
-- **`unpackr-cli-...-x86_64-unknown-linux-musl.tar.gz`**: Headless static CLI binary (zero dynamic dependencies; runs anywhere including minimal Docker containers and Alpine Linux).
+Download pre-compiled packages from the **[Releases](https://github.com/RahulKumar-007/Unpackr/releases)** page:
+- **`unpackr_0.1.0_amd64.deb`**: Debian/Ubuntu package with desktop entry, icons, and shell completions.
+- **`unpackr-v0.1.0-x86_64-unknown-linux-gnu.tar.gz`**: Full build with both CLI and the native desktop GUI.
+- **`unpackr-cli-v0.1.0-x86_64-unknown-linux-musl.tar.gz`**: Headless static CLI binary (zero dynamic dependencies; runs anywhere including minimal Docker containers and Alpine Linux).
 
-### 2. From Crates.io
+### 2. Debian / Ubuntu
+```bash
+wget https://github.com/RahulKumar-007/Unpackr/releases/download/v0.1.0/unpackr_0.1.0_amd64.deb
+sudo dpkg -i unpackr_0.1.0_amd64.deb
+```
+
+### 3. Arch Linux (AUR)
+```bash
+# Using yay:
+yay -S unpackr-bin
+
+# Or manual AUR clone:
+git clone https://aur.archlinux.org/unpackr-bin.git && cd unpackr-bin && makepkg -si
+```
+
+### 4. Homebrew (macOS & Linux)
+```bash
+brew tap RahulKumar-007/tap
+brew install unpackr
+```
+
+### 5. From Crates.io
 ```bash
 # Fast binary download via cargo-binstall:
 cargo binstall unpackr
@@ -56,7 +78,7 @@ cargo binstall unpackr
 cargo install unpackr
 ```
 
-### 3. Launching
+### 6. Launching
 
 ```bash
 # 1. Native Desktop GUI (default when launched with no arguments)

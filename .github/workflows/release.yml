@@ -77,11 +77,22 @@ jobs:
           mkdir -p dist
           mv "${ARCHIVE_NAME}.tar.gz" dist/
 
+      - name: Build Debian package
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+          chmod +x packaging/build_deb.sh
+          BIN_SOURCE="target/${{ matrix.target }}/release/unpackr" VERSION="${VERSION}" ./packaging/build_deb.sh
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: dist-${{ matrix.artifact_name }}-${{ matrix.target }}
-          path: dist/*.tar.gz
+          path: |
+            dist/*.tar.gz
+            dist/*.deb
 
   publish-release:
     name: Publish GitHub Release
@@ -100,17 +111,16 @@ jobs:
       - name: Generate Checksums
         run: |
           mkdir -p release-assets
-          cp all-dist/*.tar.gz release-assets/
+          cp all-dist/*.tar.gz all-dist/*.deb release-assets/ 2>/dev/null || cp all-dist/* release-assets/
           cd release-assets
-          sha256sum *.tar.gz > SHA256SUMS.txt
+          sha256sum *.tar.gz *.deb > SHA256SUMS.txt 2>/dev/null || sha256sum * > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            release-assets/*.tar.gz
-            release-assets/SHA256SUMS.txt
+            release-assets/*
           generate_release_notes: true
           draft: false
           prerelease: false

@@ -1,0 +1,49 @@
+# Maintainer: Rahul Kumar <chhonkarrahul1362@gmail.com>
+pkgname=unpackr-bin
+_pkgname=unpackr
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Low-disk-space archive extraction engine and native GUI"
+arch=('x86_64')
+url="https://github.com/RahulKumar-007/Unpackr"
+license=('MIT' 'Apache-2.0')
+depends=('gcc-libs' 'glibc')
+optdepends=(
+    'wayland: Wayland display server support'
+    'libx11: X11 display server support'
+    'libxcursor: X11 cursor support'
+    'libxrandr: X11 randr support'
+    'libxi: X11 input support'
+)
+provides=("${_pkgname}=${pkgver}")
+conflicts=("${_pkgname}")
+source=(
+    "${pkgname}-${pkgver}.tar.gz::https://github.com/RahulKumar-007/Unpackr/releases/download/v${pkgver}/unpackr-v${pkgver}-x86_64-unknown-linux-gnu.tar.gz"
+    "unpackr-${pkgver}.desktop::https://raw.githubusercontent.com/RahulKumar-007/Unpackr/v${pkgver}/extra/unpackr.desktop"
+    "unpackr-${pkgver}.svg::https://raw.githubusercontent.com/RahulKumar-007/Unpackr/v${pkgver}/extra/unpackr.svg"
+)
+sha256sums=(
+    '5bc3cec2b165cff279af0566e1bf5b0a05a9019fae939439072e11677ab27695'
+    'de3379f04f3326427f6776fd87eaca70c393bd3fb17554f7e8c6f51d81ae8009'
+    '7123dc0c2902622dbf02134c5c6382f9ed16bcb193c9483f631f321d368bd10d'
+)
+
+package() {
+    cd "${srcdir}"
+
+    # Binary
+    install -Dm755 "${_pkgname}" "${pkgdir}/usr/bin/${_pkgname}"
+
+    # Desktop & Icon
+    install -Dm644 "unpackr-${pkgver}.desktop" "${pkgdir}/usr/share/applications/${_pkgname}.desktop"
+    install -Dm644 "unpackr-${pkgver}.svg" "${pkgdir}/usr/share/icons/hicolor/scalable/apps/${_pkgname}.svg"
+
+    # Licenses
+    install -Dm644 LICENSE-MIT "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE-MIT"
+    install -Dm644 LICENSE-APACHE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE-APACHE"
+
+    # Shell completions
+    "${srcdir}/${_pkgname}" completions bash | install -Dm644 /dev/stdin "${pkgdir}/usr/share/bash-completion/completions/${_pkgname}"
+    "${srcdir}/${_pkgname}" completions zsh | install -Dm644 /dev/stdin "${pkgdir}/usr/share/zsh/site-functions/_${_pkgname}"
+    "${srcdir}/${_pkgname}" completions fish | install -Dm644 /dev/stdin "${pkgdir}/usr/share/fish/vendor_completions.d/${_pkgname}.fish"
+}

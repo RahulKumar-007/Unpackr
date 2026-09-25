@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Unpackr
+Comment=Low-Disk-Space Archive Extraction Engine
+Exec=unpackr %F
+Terminal=false
+Type=Application
+Icon=unpackr
+Categories=Utility;Archiving;Compression;
+MimeType=application/zip;application/x-zip;application/x-zip-compressed;
+Keywords=zip;archive;extract;unzip;compression;fallocate;
+StartupNotify=true
+StartupWMClass=unpackr
