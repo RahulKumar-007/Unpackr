@@ -19,7 +19,7 @@ use std::path::PathBuf;
 )]
 pub struct Cli {
     #[command(subcommand)]
-    pub command: Commands,
+    pub command: Option<Commands>,
 
     /// Verbose logging output
     #[arg(short, long, global = true)]
@@ -32,6 +32,13 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
+    /// Launch the modern minimalist native desktop GUI (default when no subcommand is given)
+    #[command(visible_alias = "gui")]
+    Ui {
+        /// Optional path to a target archive (.zip) to load on startup
+        archive: Option<PathBuf>,
+    },
+
     /// Inspect an archive and display detailed entry metadata and offsets without extracting
     #[command(visible_alias = "i")]
     Inspect {

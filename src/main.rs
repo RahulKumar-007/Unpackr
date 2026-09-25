@@ -5,15 +5,21 @@ use unpackr::cli::{Cli, Commands};
 
 fn run(cli: Cli) -> Result<()> {
     match cli.command {
-        Commands::Inspect {
+        Some(Commands::Ui { archive }) => {
+            unpackr::gui::run_gui(archive)?;
+        }
+        None => {
+            unpackr::gui::run_gui(None)?;
+        }
+        Some(Commands::Inspect {
             archive,
             json,
             limit,
-        } => {
+        }) => {
             let limit_opt = if limit == 0 { None } else { Some(limit) };
             unpackr::cli::inspect::run_inspect(&archive, json, limit_opt)?;
         }
-        Commands::Extract {
+        Some(Commands::Extract {
             archive,
             destination,
             collision,
@@ -25,7 +31,7 @@ fn run(cli: Cli) -> Result<()> {
             max_entries,
             state_dir,
             json,
-        } => {
+        }) => {
             let collision_policy = collision;
             let options = unpackr::extraction::ExtractionOptions {
                 destination: destination.clone(),
@@ -84,7 +90,7 @@ fn run(cli: Cli) -> Result<()> {
                 println!("================================================================================");
             }
         }
-        Commands::Resume {
+        Some(Commands::Resume {
             target,
             destination,
             archive,
@@ -96,7 +102,7 @@ fn run(cli: Cli) -> Result<()> {
             max_file_size,
             max_entries,
             json,
-        } => {
+        }) => {
             unpackr::cli::resume::run_resume(
                 &target,
                 destination,
@@ -113,28 +119,28 @@ fn run(cli: Cli) -> Result<()> {
                 cli.quiet,
             )?;
         }
-        Commands::Status { job_id, json } => {
+        Some(Commands::Status { job_id, json }) => {
             unpackr::cli::status::run_status(&job_id, json)?;
         }
-        Commands::Verify { job_id, json } => {
+        Some(Commands::Verify { job_id, json }) => {
             unpackr::cli::verify::run_verify(&job_id, json)?;
         }
-        Commands::Cancel {
+        Some(Commands::Cancel {
             job_id,
             clean,
             json,
-        } => {
+        }) => {
             unpackr::cli::cancel::run_cancel(&job_id, clean, json)?;
         }
-        Commands::Bench {
+        Some(Commands::Bench {
             archive,
             entries,
             size_mb,
             json,
-        } => {
+        }) => {
             unpackr::cli::bench::run_bench(archive, entries, size_mb, json, cli.verbose)?;
         }
-        Commands::Completions { shell } => {
+        Some(Commands::Completions { shell }) => {
             unpackr::cli::completions::run_completions(shell);
         }
     }

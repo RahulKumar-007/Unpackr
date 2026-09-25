@@ -29,6 +29,10 @@ pub fn run_cancel(job_id_or_path: &str, clean: bool, json: bool) -> Result<()> {
         if let Some(parent) = manifest_path.parent() {
             let _ = fs::remove_dir_all(parent);
         }
+        // Also remove global mirror directory in ~/.unpackr/jobs/<job_id>
+        if let Some(global_dir) = crate::state::job::global_jobs_dir() {
+            let _ = fs::remove_dir_all(global_dir.join(&tracker.manifest.job_id));
+        }
     }
 
     if json {

@@ -19,14 +19,17 @@ walkdir = "2.5"
 tempfile = "3.10"
 zip = { version = "2.1", default-features = false, features = ["deflate"], optional = true }
 clap_complete = "4.5"
+eframe = { version = "0.27.2", optional = true }
+rfd = { version = "0.15.4", optional = true }
 
 [dev-dependencies]
 criterion = "0.5"
 zip = { version = "2.1", default-features = false, features = ["deflate"] }
 
 [features]
-default = ["bench"]
+default = ["bench", "gui"]
 bench = ["dep:zip"]
+gui = ["dep:eframe", "dep:rfd"]
 
 [[bench]]
 name = "engine_bench"

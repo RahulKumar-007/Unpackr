@@ -21,7 +21,7 @@ use zip::write::SimpleFileOptions;
 #[cfg(feature = "bench")]
 use zip::ZipWriter;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BenchmarkReport {
     pub workload: String,
     pub total_entries: usize,
@@ -69,13 +69,13 @@ fn generate_synthetic_archive(
 }
 
 #[cfg(feature = "bench")]
-pub fn run_bench(
+pub fn compute_benchmark_report(
     archive: Option<PathBuf>,
     entries: usize,
     size_mb: usize,
-    json: bool,
+    quiet: bool,
     verbose: bool,
-) -> Result<()> {
+) -> Result<BenchmarkReport> {
     let temp_workspace =
         tempdir().with_context(|| "Failed to create temporary benchmark workspace")?;
     let (archive_std, archive_rec, workload_name) = match archive {
@@ -105,7 +105,7 @@ pub fn run_bench(
             let synth_std = temp_workspace.path().join("synthetic_std.zip");
             let synth_rec = temp_workspace.path().join("synthetic_rec.zip");
 
-            if !json {
+            if !quiet {
                 println!(
                     "Generating synthetic benchmark workload ({} entries x {} MB)...",
                     entries_count, mb
@@ -127,7 +127,9 @@ pub fn run_bench(
     let dest_std = temp_workspace.path().join("dest_standard");
     let dest_rec = temp_workspace.path().join("dest_reclaim");
 
-    if !json {
+    let bench_state_dir = temp_workspace.path().join("state");
+
+    if !quiet {
         println!("Running Standard Extraction (reclaim: false)...");
     }
     let opts_std = ExtractionOptions {
@@ -136,14 +138,14 @@ pub fn run_bench(
         enable_sparse: true,
         max_compression_ratio: 200.0,
         reclaim_archive: false,
-        state_dir: None,
+        state_dir: Some(bench_state_dir.clone()),
         verbose,
-        quiet: json,
+        quiet,
         ..Default::default()
     };
     let summary_std = ExtractionEngine::extract(&archive_std, &opts_std)?;
 
-    if !json {
+    if !quiet {
         println!("Running In-Place Reclaim Extraction (reclaim: true)...");
     }
     let opts_rec = ExtractionOptions {
@@ -152,9 +154,9 @@ pub fn run_bench(
         enable_sparse: true,
         max_compression_ratio: 200.0,
         reclaim_archive: true,
-        state_dir: None,
+        state_dir: Some(bench_state_dir),
         verbose,
-        quiet: json,
+        quiet,
         ..Default::default()
     };
     let summary_rec = ExtractionEngine::extract(&archive_rec, &opts_rec)?;
@@ -193,7 +195,7 @@ pub fn run_bench(
         0.0
     };
 
-    let report = BenchmarkReport {
+    Ok(BenchmarkReport {
         workload: workload_name,
         total_entries: summary_std.extracted_files,
         uncompressed_bytes: summary_std.total_uncompressed_bytes,
@@ -207,7 +209,18 @@ pub fn run_bench(
         peak_space_saved_percent: pct_saved,
         archive_bytes_reclaimed: summary_rec.reclaimed_archive_bytes,
         integrity_verified,
-    };
+    })
+}
+
+#[cfg(feature = "bench")]
+pub fn run_bench(
+    archive: Option<PathBuf>,
+    entries: usize,
+    size_mb: usize,
+    json: bool,
+    verbose: bool,
+) -> Result<()> {
+    let report = compute_benchmark_report(archive, entries, size_mb, json, verbose)?;
 
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
@@ -272,6 +285,17 @@ pub fn run_bench(
     println!("================================================================================");
 
     Ok(())
+}
+
+#[cfg(not(feature = "bench"))]
+pub fn compute_benchmark_report(
+    _archive: Option<PathBuf>,
+    _entries: usize,
+    _size_mb: usize,
+    _quiet: bool,
+    _verbose: bool,
+) -> Result<BenchmarkReport> {
+    anyhow::bail!("Benchmark command requires compiling with `--features bench`");
 }
 
 #[cfg(not(feature = "bench"))]

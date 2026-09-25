@@ -109,6 +109,19 @@ pub struct ExtractionSummary {
     pub duration: Duration,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtractionProgress {
+    pub current_entry_index: usize,
+    pub total_entries: usize,
+    pub current_entry_name: String,
+    pub bytes_extracted: u64,
+    pub total_uncompressed_bytes: u64,
+    pub sparse_bytes_saved: u64,
+    pub reclaimed_archive_bytes: u64,
+    pub peak_disk_footprint_bytes: u64,
+    pub throughput_mb_per_sec: f64,
+}
+
 struct DestinationLock {
     _file: File,
 }
@@ -167,11 +180,12 @@ struct ProcessEntriesParams<'a> {
     already_reclaimed_bytes: u64,
 }
 
-fn process_entries(
+fn process_entries<F: FnMut(ExtractionProgress)>(
     mut archive_file: File,
     mut puncher: Option<ArchiveHolePuncher>,
     tracker: &mut StateTracker,
     params: ProcessEntriesParams,
+    mut on_progress: F,
 ) -> Result<ExtractionSummary, ExtractionError> {
     let mut current_extracted_bytes = params.already_extracted_bytes;
     let mut current_sparse_saved = 0u64;
@@ -369,6 +383,25 @@ fn process_entries(
                 return Err(err);
             }
         }
+        let elapsed_secs = params.start_time.elapsed().as_secs_f64();
+        let newly_extracted =
+            current_extracted_bytes.saturating_sub(params.already_extracted_bytes);
+        let live_throughput = if elapsed_secs > 0.0 {
+            (newly_extracted as f64 / 1_048_576.0) / elapsed_secs
+        } else {
+            0.0
+        };
+        on_progress(ExtractionProgress {
+            current_entry_index: i + 1,
+            total_entries: params.entries.len(),
+            current_entry_name: entry.name.clone(),
+            bytes_extracted: current_extracted_bytes,
+            total_uncompressed_bytes: params.total_uncompressed_archive_size,
+            sparse_bytes_saved,
+            reclaimed_archive_bytes: params.already_reclaimed_bytes + current_reclaimed_bytes,
+            peak_disk_footprint_bytes: peak_disk_footprint,
+            throughput_mb_per_sec: live_throughput,
+        });
     }
 
     if std::io::stderr().is_terminal()
@@ -423,6 +456,15 @@ impl ExtractionEngine {
     pub fn extract(
         archive_path: &Path,
         options: &ExtractionOptions,
+    ) -> Result<ExtractionSummary, ExtractionError> {
+        Self::extract_with_progress(archive_path, options, |_| {})
+    }
+
+    /// Extracts an archive with a real-time per-entry progress callback.
+    pub fn extract_with_progress<F: FnMut(ExtractionProgress)>(
+        archive_path: &Path,
+        options: &ExtractionOptions,
+        on_progress: F,
     ) -> Result<ExtractionSummary, ExtractionError> {
         let start_time = Instant::now();
 
@@ -537,10 +579,13 @@ impl ExtractionEngine {
                 ExtractionError::Archive(format!("Failed to save initial manifest: {}", e))
             })?;
 
-            // Also mirror manifest in global jobs directory if available
-            if let Some(global_dir) = global_jobs_dir() {
-                let global_manifest_path = global_dir.join(job_id.as_str()).join("manifest.json");
-                let _ = manifest.save_atomic(&global_manifest_path);
+            // Also mirror manifest in global jobs directory if available (when using default state_dir)
+            if options.state_dir.is_none() {
+                if let Some(global_dir) = global_jobs_dir() {
+                    let global_manifest_path =
+                        global_dir.join(job_id.as_str()).join("manifest.json");
+                    let _ = manifest.save_atomic(&global_manifest_path);
+                }
             }
 
             StateTracker::new(manifest, manifest_path.clone())
@@ -567,13 +612,22 @@ impl ExtractionEngine {
             already_reclaimed_bytes: 0,
         };
 
-        process_entries(archive_file, puncher, &mut tracker, params)
+        process_entries(archive_file, puncher, &mut tracker, params, on_progress)
     }
 
     /// Resumes an interrupted extraction job, reconciling orphaned temporary files and incomplete entries.
     pub fn resume(
         job_id_or_path: &str,
         options: &ResumeOptions,
+    ) -> Result<ExtractionSummary, ExtractionError> {
+        Self::resume_with_progress(job_id_or_path, options, |_| {})
+    }
+
+    /// Resumes an interrupted extraction job with a real-time per-entry progress callback.
+    pub fn resume_with_progress<F: FnMut(ExtractionProgress)>(
+        job_id_or_path: &str,
+        options: &ResumeOptions,
+        on_progress: F,
     ) -> Result<ExtractionSummary, ExtractionError> {
         let start_time = Instant::now();
 
@@ -752,6 +806,6 @@ impl ExtractionEngine {
             already_reclaimed_bytes,
         };
 
-        process_entries(archive_file, puncher, &mut tracker, params)
+        process_entries(archive_file, puncher, &mut tracker, params, on_progress)
     }
 }

@@ -27,7 +27,7 @@ pub struct StateTracker {
     last_checkpoint: std::time::Instant,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct VerificationFailure {
     pub entry_name: String,
     pub path: PathBuf,
@@ -170,6 +170,17 @@ impl StateTracker {
         Ok(())
     }
 
+    fn persist_manifest(&self) -> Result<()> {
+        self.manifest.save_atomic(&self.manifest_path)?;
+        if let Some(global_dir) = crate::state::job::global_jobs_dir() {
+            let global_manifest_path = global_dir.join(&self.manifest.job_id).join("manifest.json");
+            if global_manifest_path != self.manifest_path && global_manifest_path.exists() {
+                let _ = self.manifest.save_atomic(&global_manifest_path);
+            }
+        }
+        Ok(())
+    }
+
     /// Checkpoints the manifest to disk if threshold of entries (100) or time (5s) is reached,
     /// or if force is true.
     pub fn save_checkpoint_if_needed(&mut self, force: bool) -> Result<()> {
@@ -182,7 +193,7 @@ impl StateTracker {
             || self.last_checkpoint.elapsed() >= std::time::Duration::from_secs(5);
 
         if should_save {
-            self.manifest.save_atomic(&self.manifest_path)?;
+            self.persist_manifest()?;
             self.manifest_needs_save = false;
             self.dirty_count = 0;
             self.last_checkpoint = std::time::Instant::now();
@@ -201,7 +212,7 @@ impl StateTracker {
             record.output_path = Some(output_path);
             self.touch();
             self.manifest_needs_save = true;
-            self.manifest.save_atomic(&self.manifest_path)?;
+            self.persist_manifest()?;
             self.manifest_needs_save = false;
             self.dirty_count = 0;
         }
@@ -213,7 +224,7 @@ impl StateTracker {
             record.state = EntryState::Reclaimed;
             self.touch();
             self.manifest_needs_save = true;
-            self.manifest.save_atomic(&self.manifest_path)?;
+            self.persist_manifest()?;
             self.manifest_needs_save = false;
             self.dirty_count = 0;
         }
@@ -237,7 +248,7 @@ impl StateTracker {
             record.state = EntryState::Failed(reason);
             self.touch();
             self.manifest_needs_save = true;
-            self.manifest.save_atomic(&self.manifest_path)?;
+            self.persist_manifest()?;
             self.manifest_needs_save = false;
             self.dirty_count = 0;
         }
@@ -492,7 +503,7 @@ impl StateTracker {
 
         summary.pending_entries = self.manifest.pending_count();
         self.touch();
-        self.manifest.save_atomic(&self.manifest_path)?;
+        self.persist_manifest()?;
 
         Ok(summary)
     }
@@ -516,7 +527,7 @@ impl StateTracker {
         }
 
         self.touch();
-        self.manifest.save_atomic(&self.manifest_path)?;
+        self.persist_manifest()?;
         Ok(cancelled_count)
     }
 }
