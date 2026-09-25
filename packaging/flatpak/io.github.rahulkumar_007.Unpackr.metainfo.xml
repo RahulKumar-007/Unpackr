@@ -29,6 +29,12 @@
   <developer id="io.github.rahulkumar_007">
     <name>Rahul Kumar</name>
   </developer>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/RahulKumar-007/Unpackr/main/extra/screenshot.png</image>
+      <caption>Unpackr progressive low-disk extraction and inspection GUI</caption>
+    </screenshot>
+  </screenshots>
   <categories>
     <category>Utility</category>
     <category>Archiving</category>
