@@ -2,8 +2,24 @@
 name = "unpackr"
 version = "0.1.0"
 edition = "2021"
-authors = ["Unpackr Authors"]
-description = "A production-quality, low-disk-space archive extraction engine"
+authors = ["Rahul Kumar <chhonkarrahul1362@gmail.com>"]
+description = "Production-quality, low-disk-space archive extraction engine with progressive in-place storage reclamation and native GUI"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/RahulKumar-007/Unpackr"
+homepage = "https://github.com/RahulKumar-007/Unpackr"
+documentation = "https://docs.rs/unpackr"
+readme = "README.md"
+keywords = ["zip", "archive", "extraction", "fallocate", "storage"]
+categories = ["command-line-utilities", "compression", "filesystem", "gui"]
+exclude = [
+    "tests/test_data/*",
+    ".github/*",
+]
+
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-v{ version }-{ target }.tar.gz"
+bin-dir = "{ name }-v{ version }-{ target }/{ bin }"
+pkg-fmt = "tgz"
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }

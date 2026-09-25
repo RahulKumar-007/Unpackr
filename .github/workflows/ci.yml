@@ -22,6 +22,11 @@ jobs:
         with:
           components: clippy, rustfmt
 
+      - name: Install system dependencies (Linux GUI)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev libgl1-mesa-dev libfontconfig1-dev
+
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
 
