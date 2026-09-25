@@ -11,8 +11,9 @@ finish-args:
   - --socket=wayland
   # Hardware accelerated graphics
   - --device=dri
-  # Filesystem access to read archives and write extracted files
-  - --filesystem=host
+  # File storage access
+  - --filesystem=xdg-download
+  - --filesystem=xdg-documents
 
 modules:
   - name: unpackr
