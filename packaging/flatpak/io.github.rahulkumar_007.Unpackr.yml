@@ -27,6 +27,7 @@ modules:
       - type: archive
         url: https://github.com/RahulKumar-007/Unpackr/releases/download/v0.1.0/unpackr-v0.1.0-x86_64-unknown-linux-gnu.tar.gz
         sha256: 5bc3cec2b165cff279af0566e1bf5b0a05a9019fae939439072e11677ab27695
+        strip-components: 0
       - type: file
         path: io.github.rahulkumar_007.Unpackr.desktop
       - type: file
