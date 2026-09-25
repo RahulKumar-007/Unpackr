@@ -21,6 +21,19 @@ pkg-url = "{ repo }/releases/download/v{ version }/{ name }-v{ version }-{ targe
 bin-dir = "{ name }-v{ version }-{ target }/{ bin }"
 pkg-fmt = "tgz"
 
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/unpackr", dest = "/usr/bin/unpackr", mode = "755" },
+    { source = "extra/unpackr.desktop", dest = "/usr/share/applications/unpackr.desktop", mode = "644" },
+    { source = "extra/unpackr.svg", dest = "/usr/share/icons/hicolor/scalable/apps/unpackr.svg", mode = "644" },
+    { source = "README.md", dest = "/usr/share/doc/unpackr/README.md", mode = "644" },
+    { source = "LICENSE-MIT", dest = "/usr/share/licenses/unpackr/LICENSE-MIT", mode = "644" },
+    { source = "LICENSE-APACHE", dest = "/usr/share/licenses/unpackr/LICENSE-APACHE", mode = "644" },
+    { source = "target/completions/unpackr", dest = "/usr/share/bash-completion/completions/unpackr", mode = "644" },
+    { source = "target/completions/_unpackr", dest = "/usr/share/zsh/site-functions/_unpackr", mode = "644" },
+    { source = "target/completions/unpackr.fish", dest = "/usr/share/fish/vendor_completions.d/unpackr.fish", mode = "644" },
+]
+
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
 flate2 = "1.0"

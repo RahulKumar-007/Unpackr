@@ -45,6 +45,7 @@ $$\text{Unpackr Peak} = \max_t \Big( (\text{Archive}_{\text{initial}} - \text{Re
 ### 1. Pre-built Binaries (GitHub Releases)
 Download pre-compiled packages from the **[Releases](https://github.com/RahulKumar-007/Unpackr/releases)** page:
 - **`unpackr_0.1.0_amd64.deb`**: Debian/Ubuntu package with desktop entry, icons, and shell completions.
+- **`unpackr-0.1.0-1.x86_64.rpm`**: Fedora/RHEL package with desktop entry, icons, and shell completions.
 - **`unpackr-v0.1.0-x86_64-unknown-linux-gnu.tar.gz`**: Full build with both CLI and the native desktop GUI.
 - **`unpackr-cli-v0.1.0-x86_64-unknown-linux-musl.tar.gz`**: Headless static CLI binary (zero dynamic dependencies; runs anywhere including minimal Docker containers and Alpine Linux).
 
@@ -54,7 +55,13 @@ wget https://github.com/RahulKumar-007/Unpackr/releases/download/v0.1.0/unpackr_
 sudo dpkg -i unpackr_0.1.0_amd64.deb
 ```
 
-### 3. Arch Linux (AUR)
+### 3. Fedora / RHEL / openSUSE
+```bash
+wget https://github.com/RahulKumar-007/Unpackr/releases/download/v0.1.0/unpackr-0.1.0-1.x86_64.rpm
+sudo dnf install ./unpackr-0.1.0-1.x86_64.rpm
+```
+
+### 4. Arch Linux (AUR)
 ```bash
 # Using yay:
 yay -S unpackr-bin
