@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>io.github.rahulkumar007.Unpackr</id>
+  <id>io.github.rahulkumar_007.Unpackr</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT OR Apache-2.0</project_license>
   <name>Unpackr</name>
@@ -22,11 +22,11 @@
       <li>Modern native desktop GUI powered by egui/eframe with real-time speed, ETA, and progress charts</li>
     </ul>
   </description>
-  <launchable type="desktop-id">io.github.rahulkumar007.Unpackr.desktop</launchable>
+  <launchable type="desktop-id">io.github.rahulkumar_007.Unpackr.desktop</launchable>
   <url type="homepage">https://github.com/RahulKumar-007/Unpackr</url>
   <url type="bugtracker">https://github.com/RahulKumar-007/Unpackr/issues</url>
   <url type="vcs-browser">https://github.com/RahulKumar-007/Unpackr</url>
-  <developer id="io.github.rahulkumar007">
+  <developer id="io.github.rahulkumar_007">
     <name>Rahul Kumar</name>
   </developer>
   <categories>

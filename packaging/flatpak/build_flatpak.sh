@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MANIFEST="$(dirname "$0")/io.github.rahulkumar007.Unpackr.yml"
+MANIFEST="$(dirname "$0")/io.github.rahulkumar_007.Unpackr.yml"
 BUILD_DIR="/tmp/flatpak-unpackr-build"
 REPO_DIR="/tmp/flatpak-unpackr-repo"
 

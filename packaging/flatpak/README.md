@@ -4,10 +4,10 @@ This directory contains the files required for publishing **Unpackr** to [Flathu
 
 ## Files Included
 
-- **`io.github.rahulkumar007.Unpackr.yml`**: Flatpak builder manifest configuring permissions (`--socket=wayland`, `--socket=fallback-x11`, `--device=dri`, `--filesystem=host`).
-- **`io.github.rahulkumar007.Unpackr.metainfo.xml`**: AppStream metadata specification (descriptions, license, developer details, categories).
-- **`io.github.rahulkumar007.Unpackr.desktop`**: FreeDesktop desktop entry.
-- **`io.github.rahulkumar007.Unpackr.svg`**: Application vector icon.
+- **`io.github.rahulkumar_007.Unpackr.yml`**: Flatpak builder manifest configuring permissions (`--socket=wayland`, `--socket=fallback-x11`, `--device=dri`, `--filesystem=host`).
+- **`io.github.rahulkumar_007.Unpackr.metainfo.xml`**: AppStream metadata specification (descriptions, license, developer details, categories).
+- **`io.github.rahulkumar_007.Unpackr.desktop`**: FreeDesktop desktop entry.
+- **`io.github.rahulkumar_007.Unpackr.svg`**: Application vector icon.
 
 ---
 
@@ -20,23 +20,23 @@ This directory contains the files required for publishing **Unpackr** to [Flathu
    ```bash
    git clone git@github.com:RahulKumar-007/flathub.git
    cd flathub
-   git checkout -b new-pr/io.github.rahulkumar007.Unpackr
+   git checkout -b new-pr/io.github.rahulkumar_007.Unpackr
    ```
 
 3. **Add the Package Directory**:
    Create a new directory named after the App ID and copy these files:
    ```bash
-   mkdir -p io.github.rahulkumar007.Unpackr
-   cp /path/to/unpackr/packaging/flatpak/* io.github.rahulkumar007.Unpackr/
-   rm io.github.rahulkumar007.Unpackr/README.md io.github.rahulkumar007.Unpackr/build_flatpak.sh
+   mkdir -p io.github.rahulkumar_007.Unpackr
+   cp /path/to/unpackr/packaging/flatpak/* io.github.rahulkumar_007.Unpackr/
+   rm io.github.rahulkumar_007.Unpackr/README.md io.github.rahulkumar_007.Unpackr/build_flatpak.sh
    ```
 
 4. **Commit & Push**:
    ```bash
-   git add io.github.rahulkumar007.Unpackr
-   git commit -m "Add io.github.rahulkumar007.Unpackr"
-   git push origin new-pr/io.github.rahulkumar007.Unpackr
+   git add io.github.rahulkumar_007.Unpackr
+   git commit -m "Add io.github.rahulkumar_007.Unpackr"
+   git push origin new-pr/io.github.rahulkumar_007.Unpackr
    ```
 
 5. **Open Pull Request**:
-   Open a pull request to `flathub/flathub`. The Flathub build bot (`@flathubbot`) will automatically build and test the Flatpak. Once reviewed and approved by Flathub maintainers, the repository `https://github.com/flathub/io.github.rahulkumar007.Unpackr` is automatically created, and your app will be published on Flathub!
+   Open a pull request to `flathub/flathub`. The Flathub build bot (`@flathubbot`) will automatically build and test the Flatpak. Once reviewed and approved by Flathub maintainers, the repository `https://github.com/flathub/io.github.rahulkumar_007.Unpackr` is automatically created, and your app will be published on Flathub!

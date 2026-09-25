@@ -32,10 +32,10 @@ install -m 644 extra/unpackr.svg "${APPDIR}/usr/share/icons/hicolor/scalable/app
 install -m 644 extra/unpackr.svg "${APPDIR}/unpackr.svg"
 install -m 644 extra/unpackr.svg "${APPDIR}/.DirIcon"
 
-if [ -f packaging/flatpak/io.github.rahulkumar007.Unpackr.metainfo.xml ]; then
-    install -m 644 packaging/flatpak/io.github.rahulkumar007.Unpackr.metainfo.xml \
-        "${APPDIR}/usr/share/metainfo/io.github.rahulkumar007.Unpackr.metainfo.xml"
-    install -m 644 packaging/flatpak/io.github.rahulkumar007.Unpackr.metainfo.xml \
+if [ -f packaging/flatpak/io.github.rahulkumar_007.Unpackr.metainfo.xml ]; then
+    install -m 644 packaging/flatpak/io.github.rahulkumar_007.Unpackr.metainfo.xml \
+        "${APPDIR}/usr/share/metainfo/io.github.rahulkumar_007.Unpackr.metainfo.xml"
+    install -m 644 packaging/flatpak/io.github.rahulkumar_007.Unpackr.metainfo.xml \
         "${APPDIR}/usr/share/metainfo/unpackr.appdata.xml"
 fi
 

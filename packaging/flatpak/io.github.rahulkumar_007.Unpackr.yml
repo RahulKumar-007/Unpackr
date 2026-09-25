@@ -1,4 +1,4 @@
-app-id: io.github.rahulkumar007.Unpackr
+app-id: io.github.rahulkumar_007.Unpackr
 runtime: org.freedesktop.Platform
 runtime-version: '24.08'
 sdk: org.freedesktop.Sdk
@@ -20,16 +20,16 @@ modules:
     buildsystem: simple
     build-commands:
       - install -Dm755 unpackr /app/bin/unpackr
-      - install -Dm644 io.github.rahulkumar007.Unpackr.desktop /app/share/applications/io.github.rahulkumar007.Unpackr.desktop
-      - install -Dm644 io.github.rahulkumar007.Unpackr.svg /app/share/icons/hicolor/scalable/apps/io.github.rahulkumar007.Unpackr.svg
-      - install -Dm644 io.github.rahulkumar007.Unpackr.metainfo.xml /app/share/metainfo/io.github.rahulkumar007.Unpackr.metainfo.xml
+      - install -Dm644 io.github.rahulkumar_007.Unpackr.desktop /app/share/applications/io.github.rahulkumar_007.Unpackr.desktop
+      - install -Dm644 io.github.rahulkumar_007.Unpackr.svg /app/share/icons/hicolor/scalable/apps/io.github.rahulkumar_007.Unpackr.svg
+      - install -Dm644 io.github.rahulkumar_007.Unpackr.metainfo.xml /app/share/metainfo/io.github.rahulkumar_007.Unpackr.metainfo.xml
     sources:
       - type: archive
         url: https://github.com/RahulKumar-007/Unpackr/releases/download/v0.1.0/unpackr-v0.1.0-x86_64-unknown-linux-gnu.tar.gz
         sha256: 5bc3cec2b165cff279af0566e1bf5b0a05a9019fae939439072e11677ab27695
       - type: file
-        path: io.github.rahulkumar007.Unpackr.desktop
+        path: io.github.rahulkumar_007.Unpackr.desktop
       - type: file
-        path: io.github.rahulkumar007.Unpackr.svg
+        path: io.github.rahulkumar_007.Unpackr.svg
       - type: file
-        path: io.github.rahulkumar007.Unpackr.metainfo.xml
+        path: io.github.rahulkumar_007.Unpackr.metainfo.xml
