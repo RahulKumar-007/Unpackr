@@ -13,7 +13,7 @@ use std::path::PathBuf;
 #[command(
     name = "unpackr",
     author = "Unpackr Authors",
-    version = "0.1.0",
+    version,
     about = "Production-quality, low-disk-space archive extraction engine",
     long_about = "Unpackr extracts large ZIP archives while minimizing peak disk space usage through incremental verified extraction and storage reclamation."
 )]
@@ -91,7 +91,7 @@ pub enum Commands {
         #[arg(long)]
         max_entries: Option<usize>,
 
-        /// Custom state directory for crash recovery journals (default: <destination>/.unpackr/)
+        /// Custom state directory for crash recovery journals (default: `<destination>/.unpackr/`)
         #[arg(long)]
         state_dir: Option<PathBuf>,
 

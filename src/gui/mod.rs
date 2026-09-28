@@ -540,7 +540,12 @@ mod gui_impl {
                                 .color(TEXT_PRIMARY),
                         );
                         ui.add_space(4.0);
-                        badge_pill(ui, "v0.1.0", CARD_ELEVATED, TEXT_MUTED);
+                        badge_pill(
+                            ui,
+                            concat!("v", env!("CARGO_PKG_VERSION")),
+                            CARD_ELEVATED,
+                            TEXT_MUTED,
+                        );
                         ui.add_space(16.0);
 
                         // Navigation Tabs

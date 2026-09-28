@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-09-28
+
+### Fixed
+- **docs.rs & Nightly Rustc Build Fix**: Configured `eframe` with `default-features = false` and explicitly selected `["default_fonts", "glow", "wayland", "x11"]`, dropping the transitive `accesskit -> rustix 0.37.28` dependency chain that failed to compile on nightly `rustc` due to deprecated `rustc_attrs`.
+- **Docs Configuration**: Added `[package.metadata.docs.rs]` target and feature configuration.
+- **Cargo Lint**: Removed redundant `package.homepage` that matched `package.repository`.
+- **Rustdoc Warnings**: Fixed unescaped HTML tag in CLI documentation and added crate-level documentation to `lib.rs`.
+
 ## [0.1.0] - 2026-09-24
 
 ### Security & Reliability Hardening

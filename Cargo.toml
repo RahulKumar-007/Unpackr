@@ -1,12 +1,11 @@
 [package]
 name = "unpackr"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["Rahul Kumar <chhonkarrahul1362@gmail.com>"]
 description = "Production-quality, low-disk-space archive extraction engine with progressive in-place storage reclamation and native GUI"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/RahulKumar-007/Unpackr"
-homepage = "https://github.com/RahulKumar-007/Unpackr"
 documentation = "https://docs.rs/unpackr"
 readme = "README.md"
 keywords = ["zip", "archive", "extraction", "fallocate", "storage"]
@@ -15,6 +14,10 @@ exclude = [
     "tests/test_data/*",
     ".github/*",
 ]
+
+[package.metadata.docs.rs]
+all-features = true
+targets = ["x86_64-unknown-linux-gnu"]
 
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/v{ version }/{ name }-v{ version }-{ target }.tar.gz"
@@ -48,7 +51,7 @@ walkdir = "2.5"
 tempfile = "3.10"
 zip = { version = "2.1", default-features = false, features = ["deflate"], optional = true }
 clap_complete = "4.5"
-eframe = { version = "0.27.2", optional = true }
+eframe = { version = "0.27.2", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"], optional = true }
 rfd = { version = "0.15.4", optional = true }
 
 [dev-dependencies]
