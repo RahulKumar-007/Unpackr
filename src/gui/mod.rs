@@ -15,13 +15,14 @@ pub fn run_gui(initial_archive: Option<PathBuf>) -> Result<()> {
 mod gui_impl {
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::Duration;
 
     use anyhow::Result;
     use eframe::egui::{
-        self, Align, Color32, FontFamily, FontId, Frame, Layout, Margin, RichText, Rounding,
+        self, Align, Align2, Color32, FontFamily, FontId, Frame, Layout, Margin, RichText, Rounding,
         ScrollArea, Stroke, TextEdit, Vec2,
     };
 
@@ -36,11 +37,23 @@ mod gui_impl {
     use crate::state::manifest::ExtractionManifest;
     use crate::state::tracker::{StateTracker, VerificationFailure};
 
-    // Minimalist Palette
+    // Design System Spacing Scale
+    const SPACE_XS: f32 = 4.0;
+    const SPACE_SM: f32 = 8.0;
+    const SPACE_MD: f32 = 14.0;
+    const SPACE_LG: f32 = 20.0;
+
+    // Design System Typography Scale
+    const FONT_LABEL: f32 = 11.5;
+    const FONT_BODY: f32 = 13.0;
+    const FONT_TITLE: f32 = 15.0;
+    const FONT_METRIC: f32 = 16.5;
+
+    // Minimalist Palette Constants (Dark Mode Defaults)
     const BG_DARK: Color32 = Color32::from_rgb(13, 15, 19);
     const CARD_BG: Color32 = Color32::from_rgb(20, 23, 29);
     const CARD_ELEVATED: Color32 = Color32::from_rgb(27, 31, 40);
-    const BORDER_SUBTLE: Color32 = Color32::from_rgb(38, 44, 56);
+    const BORDER_SUBTLE: Color32 = Color32::from_rgb(44, 48, 60);
     const TEXT_PRIMARY: Color32 = Color32::from_rgb(243, 244, 246);
     const TEXT_MUTED: Color32 = Color32::from_rgb(148, 163, 184);
     const TEXT_DIM: Color32 = Color32::from_rgb(100, 116, 139);
@@ -50,6 +63,73 @@ mod gui_impl {
     const ACCENT_CYAN: Color32 = Color32::from_rgb(6, 182, 212);
     const ACCENT_AMBER: Color32 = Color32::from_rgb(245, 158, 11);
     const ACCENT_ROSE: Color32 = Color32::from_rgb(239, 68, 68);
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct ThemePalette {
+        pub bg_dark: Color32,
+        pub card_bg: Color32,
+        pub card_elevated: Color32,
+        pub border_subtle: Color32,
+        pub text_primary: Color32,
+        pub text_muted: Color32,
+        pub text_dim: Color32,
+    }
+
+    impl ThemePalette {
+        pub fn dark() -> Self {
+            Self {
+                bg_dark: Color32::from_rgb(13, 15, 19),
+                card_bg: Color32::from_rgb(20, 23, 29),
+                card_elevated: Color32::from_rgb(27, 31, 40),
+                border_subtle: Color32::from_rgb(44, 48, 60),
+                text_primary: Color32::from_rgb(243, 244, 246),
+                text_muted: Color32::from_rgb(148, 163, 184),
+                text_dim: Color32::from_rgb(100, 116, 139),
+            }
+        }
+
+        pub fn light() -> Self {
+            Self {
+                bg_dark: Color32::from_rgb(245, 247, 250),
+                card_bg: Color32::from_rgb(255, 255, 255),
+                card_elevated: Color32::from_rgb(240, 243, 248),
+                border_subtle: Color32::from_rgb(222, 226, 233),
+                text_primary: Color32::from_rgb(15, 23, 42),
+                text_muted: Color32::from_rgb(71, 85, 105),
+                text_dim: Color32::from_rgb(148, 163, 184),
+            }
+        }
+    }
+
+    fn recent_archives_path() -> Option<PathBuf> {
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|h| h.join(".unpackr").join("recent.json"))
+    }
+
+    fn load_recent_archives() -> Vec<PathBuf> {
+        if let Some(path) = recent_archives_path() {
+            if path.is_file() {
+                if let Ok(data) = fs::read_to_string(&path) {
+                    if let Ok(list) = serde_json::from_str::<Vec<PathBuf>>(&data) {
+                        return list.into_iter().filter(|p| p.is_file()).take(8).collect();
+                    }
+                }
+            }
+        }
+        Vec::new()
+    }
+
+    fn save_recent_archives(list: &[PathBuf]) {
+        if let Some(path) = recent_archives_path() {
+            if let Some(parent) = path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            if let Ok(json) = serde_json::to_string_pretty(&list) {
+                let _ = fs::write(path, json);
+            }
+        }
+    }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum ActiveTab {
@@ -64,6 +144,18 @@ mod gui_impl {
         FilesOnly,
         DirsOnly,
         SymlinksOnly,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum EntrySortKey {
+        Index,
+        Path,
+        Method,
+        Compressed,
+        Uncompressed,
+        Ratio,
+        Crc32,
+        Offset,
     }
 
     #[derive(Debug, Clone)]
@@ -103,16 +195,22 @@ mod gui_impl {
         max_entries_limit: usize,
         max_total_size_mb: u64, // 0 means unlimited
         max_file_size_mb: u64,  // 0 means unlimited
-        show_security_settings: bool,
 
-        // Entry table filters
+        // Entry table filters & sorting
         entry_search: String,
         entry_filter: EntryFilter,
+        sort_key: EntrySortKey,
+        sort_ascending: bool,
 
         // Background task state
         bg_state: Arc<Mutex<BackgroundEvent>>,
         last_summary: Option<ExtractionSummary>,
         status_banner: Option<(String, Color32)>,
+        cancel_token: Option<Arc<AtomicBool>>,
+
+        // History & Theming
+        recent_archives: Vec<PathBuf>,
+        is_dark_mode: bool,
 
         // Jobs tab state
         jobs: Vec<JobEntryItem>,
@@ -126,11 +224,12 @@ mod gui_impl {
         bench_entries: usize,
         bench_size_mb: usize,
         last_bench_report: Option<BenchmarkReport>,
+        bench_history: Vec<BenchmarkReport>,
     }
 
     impl UnpackrApp {
         pub fn new(cc: &eframe::CreationContext<'_>, initial_archive: Option<PathBuf>) -> Self {
-            configure_minimalist_theme(&cc.egui_ctx);
+            configure_minimalist_theme(&cc.egui_ctx, true);
 
             let mut app = Self {
                 active_tab: ActiveTab::Extract,
@@ -145,12 +244,16 @@ mod gui_impl {
                 max_entries_limit: DEFAULT_MAX_ENTRIES,
                 max_total_size_mb: 0,
                 max_file_size_mb: 0,
-                show_security_settings: false,
                 entry_search: String::new(),
                 entry_filter: EntryFilter::All,
+                sort_key: EntrySortKey::Index,
+                sort_ascending: true,
                 bg_state: Arc::new(Mutex::new(BackgroundEvent::Idle)),
                 last_summary: None,
                 status_banner: None,
+                cancel_token: None,
+                recent_archives: load_recent_archives(),
+                is_dark_mode: true,
                 jobs: Vec::new(),
                 resume_retry_failed: true,
                 resume_verify_existing: false,
@@ -160,6 +263,7 @@ mod gui_impl {
                 bench_entries: 6,
                 bench_size_mb: 3,
                 last_bench_report: None,
+                bench_history: Vec::new(),
             };
 
             if let Some(path) = initial_archive {
@@ -167,6 +271,48 @@ mod gui_impl {
             }
             app.refresh_jobs();
             app
+        }
+
+        fn theme(&self) -> ThemePalette {
+            if self.is_dark_mode {
+                ThemePalette::dark()
+            } else {
+                ThemePalette::light()
+            }
+        }
+
+        fn card_frame(&self) -> Frame {
+            let p = self.theme();
+            Frame::none()
+                .fill(p.card_bg)
+                .stroke(Stroke::new(1.0_f32, p.border_subtle))
+                .rounding(Rounding::same(8.0))
+                .inner_margin(Margin::symmetric(18.0, 14.0))
+        }
+
+        fn metric_tile(
+            &self,
+            ui: &mut egui::Ui,
+            label: &str,
+            value: &str,
+            value_color: Color32,
+        ) {
+            let p = self.theme();
+            let resp = Frame::none()
+                .fill(p.card_elevated)
+                .rounding(Rounding::same(6.0))
+                .inner_margin(Margin::symmetric(12.0, 9.0))
+                .stroke(Stroke::new(1.0_f32, p.border_subtle))
+                .show(ui, |ui| {
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new(label).size(FONT_LABEL).color(p.text_muted));
+                        ui.add_space(2.0);
+                        ui.label(RichText::new(value).size(FONT_METRIC).strong().color(value_color));
+                    });
+                });
+            if resp.response.interact(egui::Sense::click()).on_hover_text(format!("Click to copy \"{}\"", value)).clicked() {
+                ui.output_mut(|o| o.copied_text = value.to_string());
+            }
         }
 
         fn is_busy(&self) -> bool {
@@ -191,6 +337,12 @@ mod gui_impl {
                 .unwrap_or("extracted_output");
             let parent = path.parent().unwrap_or_else(|| Path::new("."));
             self.dest_path_input = parent.join(stem).display().to_string();
+
+            // Record in recent archives history
+            self.recent_archives.retain(|p| p != &path);
+            self.recent_archives.insert(0, path.clone());
+            self.recent_archives.truncate(8);
+            save_recent_archives(&self.recent_archives);
 
             match ZipInspector::inspect(&path) {
                 Ok(insp) => {
@@ -311,6 +463,9 @@ mod gui_impl {
                 max_entries: Some(self.max_entries_limit.max(1)),
             };
 
+            let cancel_token = Arc::new(AtomicBool::new(false));
+            self.cancel_token = Some(Arc::clone(&cancel_token));
+
             let bg_state = Arc::clone(&self.bg_state);
             if let Ok(mut guard) = bg_state.lock() {
                 *guard = BackgroundEvent::Extracting(None);
@@ -321,11 +476,11 @@ mod gui_impl {
             thread::spawn(move || {
                 let progress_ref = Arc::clone(&bg_state);
                 let result =
-                    ExtractionEngine::extract_with_progress(&archive_path, &options, move |prog| {
+                    ExtractionEngine::extract_with_progress_and_cancel(&archive_path, &options, move |prog| {
                         if let Ok(mut guard) = progress_ref.lock() {
                             *guard = BackgroundEvent::Extracting(Some(prog));
                         }
-                    });
+                    }, Some(cancel_token));
 
                 if let Ok(mut guard) = bg_state.lock() {
                     *guard = BackgroundEvent::ExtractDone(result.map_err(|e| e.to_string()));
@@ -353,6 +508,9 @@ mod gui_impl {
                 max_entries: Some(self.max_entries_limit.max(1)),
             };
 
+            let cancel_token = Arc::new(AtomicBool::new(false));
+            self.cancel_token = Some(Arc::clone(&cancel_token));
+
             let bg_state = Arc::clone(&self.bg_state);
             if let Ok(mut guard) = bg_state.lock() {
                 *guard = BackgroundEvent::Extracting(None);
@@ -362,11 +520,11 @@ mod gui_impl {
             thread::spawn(move || {
                 let progress_ref = Arc::clone(&bg_state);
                 let result =
-                    ExtractionEngine::resume_with_progress(&target, &options, move |prog| {
+                    ExtractionEngine::resume_with_progress_and_cancel(&target, &options, move |prog| {
                         if let Ok(mut guard) = progress_ref.lock() {
                             *guard = BackgroundEvent::Extracting(Some(prog));
                         }
-                    });
+                    }, Some(cancel_token));
 
                 if let Ok(mut guard) = bg_state.lock() {
                     *guard = BackgroundEvent::ExtractDone(result.map_err(|e| e.to_string()));
@@ -434,6 +592,7 @@ mod gui_impl {
                         ctx.request_repaint_after(Duration::from_millis(30));
                     }
                     BackgroundEvent::ExtractDone(res) => {
+                        self.cancel_token = None;
                         match res {
                             Ok(summary) => {
                                 self.status_banner = Some((
@@ -448,8 +607,15 @@ mod gui_impl {
                                 self.last_summary = Some(summary.clone());
                             }
                             Err(err) => {
-                                self.status_banner =
-                                    Some((format!("Extraction error: {}", err), ACCENT_ROSE));
+                                if err.to_lowercase().contains("cancelled") {
+                                    self.status_banner = Some((
+                                        "Extraction cancelled by user. State is saved for atomic resume.".to_string(),
+                                        ACCENT_AMBER,
+                                    ));
+                                } else {
+                                    self.status_banner =
+                                        Some((format!("Extraction error: {}", err), ACCENT_ROSE));
+                                }
                             }
                         }
                         next_state = Some(BackgroundEvent::Idle);
@@ -457,6 +623,7 @@ mod gui_impl {
                     BackgroundEvent::BenchmarkDone(res) => {
                         match res {
                             Ok(report) => {
+                                self.bench_history.push(report.clone());
                                 self.status_banner = Some((
                                     format!(
                                         "Benchmark complete: saved {:.1}% peak disk space ({})",
@@ -521,62 +688,66 @@ mod gui_impl {
                     self.load_archive(path.clone());
                 }
             }
+            let is_hovering_files = ctx.input(|i| !i.raw.hovered_files.is_empty());
 
-            // Top Minimalist Header Bar
+            // Global Keyboard Shortcut: Ctrl+Enter (or Cmd+Enter) to Extract on Extract Tab
+            if self.active_tab == ActiveTab::Extract && !self.is_busy() {
+                let enter_pressed = ctx.input(|i| i.key_pressed(egui::Key::Enter));
+                let modifier_down = ctx.input(|i| i.modifiers.command || i.modifiers.ctrl);
+                if enter_pressed && modifier_down {
+                    self.start_extraction();
+                }
+            }
+
+            let palette = self.theme();
+
+            // Top Minimalist Brand Header
             egui::TopBottomPanel::top("header_bar")
                 .frame(
                     Frame::none()
-                        .fill(CARD_BG)
-                        .inner_margin(Margin::symmetric(20.0, 12.0))
-                        .stroke(Stroke::new(1.0_f32, BORDER_SUBTLE)),
+                        .fill(palette.card_bg)
+                        .inner_margin(Margin::symmetric(20.0, 10.0))
+                        .stroke(Stroke::new(1.0_f32, palette.border_subtle)),
                 )
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         // Brand mark
                         ui.label(
-                            RichText::new("UNPACKR")
-                                .font(FontId::new(17.0, FontFamily::Proportional))
+                            RichText::new("🗜 UNPACKR")
+                                .font(FontId::new(16.5, FontFamily::Proportional))
                                 .strong()
-                                .color(TEXT_PRIMARY),
+                                .color(palette.text_primary),
                         );
-                        ui.add_space(4.0);
+                        ui.add_space(SPACE_XS);
                         badge_pill(
                             ui,
                             concat!("v", env!("CARGO_PKG_VERSION")),
-                            CARD_ELEVATED,
-                            TEXT_MUTED,
+                            palette.card_elevated,
+                            palette.text_muted,
                         );
-                        ui.add_space(16.0);
-
-                        // Navigation Tabs
-                        nav_tab_button(
-                            ui,
-                            "Extract & Inspect",
-                            self.active_tab == ActiveTab::Extract,
-                            || {
-                                self.active_tab = ActiveTab::Extract;
-                            },
-                        );
-                        nav_tab_button(
-                            ui,
-                            &format!("Jobs & Recovery ({})", self.jobs.len()),
-                            self.active_tab == ActiveTab::Jobs,
-                            || {
-                                self.refresh_jobs();
-                                self.active_tab = ActiveTab::Jobs;
-                            },
-                        );
-                        nav_tab_button(
-                            ui,
-                            "Storage Benchmark",
-                            self.active_tab == ActiveTab::Benchmark,
-                            || {
-                                self.active_tab = ActiveTab::Benchmark;
-                            },
+                        ui.add_space(SPACE_SM);
+                        ui.label(
+                            RichText::new("Low-Disk-Space Archive Engine")
+                                .size(FONT_LABEL)
+                                .color(palette.text_dim),
                         );
 
-                        // Right-aligned live status indicator
+                        // Right-aligned live status indicator and theme toggle
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            let theme_label = if self.is_dark_mode { "☀ Light" } else { "🌙 Dark" };
+                            let theme_btn = egui::Button::new(
+                                RichText::new(theme_label).size(FONT_LABEL).strong().color(palette.text_primary),
+                            )
+                            .fill(palette.card_elevated)
+                            .stroke(Stroke::new(1.0_f32, palette.border_subtle))
+                            .rounding(Rounding::same(5.0));
+
+                            if ui.add(theme_btn).on_hover_text("Toggle Theme (Dark / Light)").clicked() {
+                                self.is_dark_mode = !self.is_dark_mode;
+                                configure_minimalist_theme(ctx, self.is_dark_mode);
+                            }
+                            ui.add_space(SPACE_SM);
+
                             if self.is_busy() {
                                 badge_pill(
                                     ui,
@@ -596,12 +767,96 @@ mod gui_impl {
                     });
                 });
 
-            // Main Content Content Canvas
+            // Dedicated Modern Navigation Tab Bar
+            egui::TopBottomPanel::top("nav_tab_bar")
+                .frame(
+                    Frame::none()
+                        .fill(palette.card_bg)
+                        .inner_margin(Margin::symmetric(20.0, 7.0))
+                        .stroke(Stroke::new(1.0_f32, palette.border_subtle)),
+                )
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        nav_tab_button(
+                            ui,
+                            &palette,
+                            "📦",
+                            "Extract & Inspect",
+                            self.active_tab == ActiveTab::Extract,
+                            || {
+                                self.active_tab = ActiveTab::Extract;
+                            },
+                        );
+                        ui.add_space(SPACE_XS);
+                        nav_tab_button(
+                            ui,
+                            &palette,
+                            "🗂",
+                            &format!("Jobs & Recovery ({})", self.jobs.len()),
+                            self.active_tab == ActiveTab::Jobs,
+                            || {
+                                self.refresh_jobs();
+                                self.active_tab = ActiveTab::Jobs;
+                            },
+                        );
+                        ui.add_space(SPACE_XS);
+                        nav_tab_button(
+                            ui,
+                            &palette,
+                            "📊",
+                            "Storage Benchmark",
+                            self.active_tab == ActiveTab::Benchmark,
+                            || {
+                                self.active_tab = ActiveTab::Benchmark;
+                            },
+                        );
+                    });
+                });
+
+            // Persistent Bottom Status Footer
+            egui::TopBottomPanel::bottom("bottom_status_bar")
+                .frame(
+                    Frame::none()
+                        .fill(palette.card_bg)
+                        .inner_margin(Margin::symmetric(20.0, 7.0))
+                        .stroke(Stroke::new(1.0_f32, palette.border_subtle)),
+                )
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        let (dot_color, status_text) = if self.is_busy() {
+                            (ACCENT_INDIGO, "Operation in progress...")
+                        } else if let Some((msg, col)) = &self.status_banner {
+                            (*col, msg.as_str())
+                        } else {
+                            (ACCENT_EMERALD, "Ready for archive operations")
+                        };
+
+                        ui.label(RichText::new("●").color(dot_color).size(12.0));
+                        ui.label(
+                            RichText::new(status_text)
+                                .size(FONT_LABEL)
+                                .color(palette.text_muted),
+                        );
+
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            ui.label(
+                                RichText::new(concat!(
+                                    "Ctrl+Enter: Extract  •  Drop ZIP anywhere  •  v",
+                                    env!("CARGO_PKG_VERSION")
+                                ))
+                                .size(FONT_LABEL)
+                                .color(palette.text_dim),
+                            );
+                        });
+                    });
+                });
+
+            // Main Content Canvas
             egui::CentralPanel::default()
                 .frame(
                     Frame::none()
-                        .fill(BG_DARK)
-                        .inner_margin(Margin::symmetric(24.0, 18.0)),
+                        .fill(palette.bg_dark)
+                        .inner_margin(Margin::symmetric(24.0, 16.0)),
                 )
                 .show(ctx, |ui| {
                     // Status notification banner if present
@@ -625,7 +880,7 @@ mod gui_impl {
                                     });
                                 });
                             });
-                        ui.add_space(12.0);
+                        ui.add_space(SPACE_MD);
                     }
                     if dismiss_banner {
                         self.status_banner = None;
@@ -643,6 +898,33 @@ mod gui_impl {
                             ActiveTab::Benchmark => self.render_benchmark_tab(ui),
                         });
                 });
+
+            // Drag-and-drop Visual Overlay
+            if is_hovering_files {
+                let screen_rect = ctx.screen_rect();
+                let painter = ctx.layer_painter(egui::LayerId::new(
+                    egui::Order::Foreground,
+                    egui::Id::new("drag_overlay_layer"),
+                ));
+                painter.rect_filled(
+                    screen_rect,
+                    Rounding::ZERO,
+                    Color32::from_black_alpha(195),
+                );
+                let border_rect = screen_rect.shrink(32.0);
+                painter.rect_stroke(
+                    border_rect,
+                    Rounding::same(12.0),
+                    Stroke::new(2.5_f32, ACCENT_INDIGO),
+                );
+                painter.text(
+                    screen_rect.center(),
+                    Align2::CENTER_CENTER,
+                    "📥  Drop ZIP Archive to Inspect & Extract",
+                    FontId::new(22.0, FontFamily::Proportional),
+                    Color32::WHITE,
+                );
+            }
         }
     }
 
@@ -658,31 +940,61 @@ mod gui_impl {
             };
 
             if let Some(opt_prog) = maybe_progress {
-                card_frame().show(ui, |ui| {
+                self.card_frame().show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.spinner();
                         ui.label(
                             RichText::new("Extracting Archive...")
+                                .size(FONT_TITLE)
                                 .strong()
-                                .color(TEXT_PRIMARY),
+                                .color(self.theme().text_primary),
                         );
-                        if let Some(prog) = &opt_prog {
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if let Some(token) = &self.cancel_token {
+                                let is_cancelling = token.load(Ordering::Relaxed);
+                                let cancel_btn = egui::Button::new(
+                                    RichText::new(if is_cancelling { "⏳ Cancelling..." } else { "⏹ Cancel" })
+                                        .size(FONT_LABEL)
+                                        .color(ACCENT_ROSE)
+                                        .strong(),
+                                )
+                                .fill(ACCENT_ROSE.gamma_multiply(0.12))
+                                .stroke(Stroke::new(1.0_f32, ACCENT_ROSE.gamma_multiply(0.5)));
+                                if ui.add_enabled(!is_cancelling, cancel_btn).clicked() {
+                                    token.store(true, Ordering::Relaxed);
+                                }
+                                ui.add_space(SPACE_SM);
+                            }
+                            if let Some(prog) = &opt_prog {
                                 ui.label(
                                     RichText::new(format!(
                                         "{:.1} MB/s  •  Peak: {}",
                                         prog.throughput_mb_per_sec,
                                         format_bytes(prog.peak_disk_footprint_bytes)
                                     ))
+                                    .size(FONT_BODY)
                                     .color(ACCENT_CYAN)
                                     .strong(),
                                 );
-                            });
-                        }
+                            }
+                        });
                     });
 
                     if let Some(prog) = opt_prog {
-                        ui.add_space(6.0);
+                        ui.add_space(SPACE_SM);
+
+                        // Current active entry name row
+                        let display_name = if prog.current_entry_name.len() > 64 {
+                            format!("…{}", &prog.current_entry_name[prog.current_entry_name.len() - 60..])
+                        } else {
+                            prog.current_entry_name.clone()
+                        };
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("📄 Current Entry:").size(FONT_LABEL).color(self.theme().text_muted));
+                            ui.label(RichText::new(display_name).size(FONT_LABEL).color(self.theme().text_primary).monospace());
+                        });
+
+                        ui.add_space(SPACE_XS);
                         let fraction = if prog.total_uncompressed_bytes > 0 {
                             (prog.bytes_extracted as f32 / prog.total_uncompressed_bytes as f32)
                                 .clamp(0.0, 1.0)
@@ -696,83 +1008,78 @@ mod gui_impl {
                         ui.add(
                             egui::ProgressBar::new(fraction)
                                 .text(format!(
-                                    "[{}/{}] {:.1}% — {}",
+                                    "[{}/{}] {:.1}%",
                                     prog.current_entry_index,
                                     prog.total_entries,
                                     fraction * 100.0,
-                                    prog.current_entry_name
                                 ))
                                 .fill(ACCENT_INDIGO),
                         );
 
-                        ui.add_space(4.0);
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                RichText::new(format!(
-                                    "Extracted: {} / {}",
-                                    format_bytes(prog.bytes_extracted),
-                                    format_bytes(prog.total_uncompressed_bytes)
-                                ))
-                                .size(12.0)
-                                .color(TEXT_MUTED),
+                        ui.add_space(SPACE_SM);
+                        ui.columns(4, |cols| {
+                            self.metric_tile(
+                                &mut cols[0],
+                                "Extracted Data",
+                                &format!("{}/{}", format_bytes(prog.bytes_extracted), format_bytes(prog.total_uncompressed_bytes)),
+                                self.theme().text_primary,
                             );
-                            if prog.reclaimed_archive_bytes > 0 {
-                                ui.add_space(12.0);
-                                ui.label(
-                                    RichText::new(format!(
-                                        "Archive Reclaimed: {}",
-                                        format_bytes(prog.reclaimed_archive_bytes)
-                                    ))
-                                    .size(12.0)
-                                    .color(ACCENT_EMERALD),
-                                );
-                            }
-                            if prog.sparse_bytes_saved > 0 {
-                                ui.add_space(12.0);
-                                ui.label(
-                                    RichText::new(format!(
-                                        "Sparse Saved: {}",
-                                        format_bytes(prog.sparse_bytes_saved)
-                                    ))
-                                    .size(12.0)
-                                    .color(ACCENT_CYAN),
-                                );
-                            }
+                            self.metric_tile(
+                                &mut cols[1],
+                                "Archive Reclaimed",
+                                &format_bytes(prog.reclaimed_archive_bytes),
+                                if prog.reclaimed_archive_bytes > 0 { ACCENT_EMERALD } else { self.theme().text_muted },
+                            );
+                            self.metric_tile(
+                                &mut cols[2],
+                                "Sparse Zero-Blocks",
+                                &format_bytes(prog.sparse_bytes_saved),
+                                if prog.sparse_bytes_saved > 0 { ACCENT_CYAN } else { self.theme().text_muted },
+                            );
+                            self.metric_tile(
+                                &mut cols[3],
+                                "Entries Remaining",
+                                &format!("{}", prog.total_entries.saturating_sub(prog.current_entry_index)),
+                                self.theme().text_muted,
+                            );
                         });
                     }
                 });
-                ui.add_space(12.0);
+                ui.add_space(SPACE_MD);
             }
         }
 
         fn render_extract_tab(&mut self, ui: &mut egui::Ui) {
             // 1. Archive & Destination Selection Card
-            card_frame().show(ui, |ui| {
+            self.card_frame().show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new("ARCHIVE & DESTINATION")
-                            .size(11.5)
+                            .size(FONT_LABEL)
                             .strong()
-                            .color(TEXT_MUTED),
+                            .color(self.theme().text_muted),
                     );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         ui.label(
                             RichText::new("Tip: Drag & drop any .zip file onto this window")
-                                .size(11.5)
-                                .color(TEXT_DIM),
+                                .size(FONT_LABEL)
+                                .color(self.theme().text_dim),
                         );
                     });
                 });
-                ui.add_space(8.0);
+                ui.add_space(SPACE_SM);
+
+                let archive_trimmed = self.archive_path_input.trim().to_string();
+                let archive_exists = !archive_trimmed.is_empty() && Path::new(&archive_trimmed).is_file();
 
                 // Source Archive Row
                 ui.horizontal(|ui| {
                     ui.add_sized(
-                        [95.0, 28.0],
-                        egui::Label::new(RichText::new("Source ZIP").color(TEXT_MUTED)),
+                        [100.0, 28.0],
+                        egui::Label::new(RichText::new("📦 Source ZIP").size(FONT_BODY).color(self.theme().text_muted)),
                     );
                     let resp = ui.add_sized(
-                        [ui.available_width() - 185.0, 28.0],
+                        [ui.available_width() - 260.0, 28.0],
                         TextEdit::singleline(&mut self.archive_path_input)
                             .hint_text("/path/to/archive.zip"),
                     );
@@ -782,7 +1089,16 @@ mod gui_impl {
                             self.load_archive(p);
                         }
                     }
-                    if ui.button("Browse...").clicked() {
+
+                    if !archive_trimmed.is_empty() {
+                        if archive_exists {
+                            badge_pill(ui, "✓ Ready", ACCENT_EMERALD.gamma_multiply(0.2), ACCENT_EMERALD);
+                        } else {
+                            badge_pill(ui, "✗ Not Found", ACCENT_ROSE.gamma_multiply(0.2), ACCENT_ROSE);
+                        }
+                    }
+
+                    if ui.button("📂 Browse...").clicked() {
                         if let Some(path) = rfd::FileDialog::new()
                             .add_filter("ZIP Archives", &["zip", "ZIP"])
                             .pick_file()
@@ -790,7 +1106,7 @@ mod gui_impl {
                             self.load_archive(path);
                         }
                     }
-                    if ui.button("Inspect").clicked() {
+                    if ui.button("🔍 Inspect").clicked() {
                         let p = PathBuf::from(self.archive_path_input.trim());
                         if !p.as_os_str().is_empty() {
                             self.load_archive(p);
@@ -798,29 +1114,78 @@ mod gui_impl {
                     }
                 });
 
-                ui.add_space(6.0);
+                if !self.recent_archives.is_empty() {
+                    ui.add_space(SPACE_XS);
+                    let mut archive_to_load = None;
+                    let mut clear_recents = false;
+                    let palette = self.theme();
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(RichText::new("Recent:").size(FONT_LABEL).color(palette.text_dim));
+                        for p in &self.recent_archives {
+                            let fname = p.file_name().and_then(|n| n.to_str()).unwrap_or("archive.zip");
+                            let btn = egui::Button::new(
+                                RichText::new(format!("📦 {}", fname)).size(FONT_LABEL).color(palette.text_primary),
+                            )
+                            .fill(palette.card_elevated)
+                            .stroke(Stroke::new(1.0_f32, palette.border_subtle))
+                            .rounding(Rounding::same(4.0));
+                            if ui.add(btn).on_hover_text(format!("Click to inspect:\n{}", p.display())).clicked() {
+                                archive_to_load = Some(p.clone());
+                            }
+                        }
+                        if ui.small_button(RichText::new("✕ Clear").size(10.0).color(palette.text_dim)).on_hover_text("Clear recent archive history").clicked() {
+                            clear_recents = true;
+                        }
+                    });
+                    if clear_recents {
+                        self.recent_archives.clear();
+                        save_recent_archives(&[]);
+                    }
+                    if let Some(p) = archive_to_load {
+                        self.load_archive(p);
+                    }
+                }
+
+                ui.add_space(SPACE_XS);
+
+                let dest_trimmed = self.dest_path_input.trim().to_string();
+                let dest_exists = !dest_trimmed.is_empty() && Path::new(&dest_trimmed).is_dir();
 
                 // Destination Row
                 ui.horizontal(|ui| {
                     ui.add_sized(
-                        [95.0, 28.0],
-                        egui::Label::new(RichText::new("Destination").color(TEXT_MUTED)),
+                        [100.0, 28.0],
+                        egui::Label::new(RichText::new("📁 Destination").size(FONT_BODY).color(TEXT_MUTED)),
                     );
-                    ui.add_sized(
-                        [ui.available_width() - 105.0, 28.0],
+                    let resp = ui.add_sized(
+                        [ui.available_width() - 200.0, 28.0],
                         TextEdit::singleline(&mut self.dest_path_input)
                             .hint_text("/path/to/output_folder"),
                     );
-                    if ui.button("Folder...").clicked() {
+                    let _ = resp;
+
+                    if !dest_trimmed.is_empty() {
+                        if dest_exists {
+                            badge_pill(ui, "✓ Existing", ACCENT_CYAN.gamma_multiply(0.2), ACCENT_CYAN);
+                        } else {
+                            badge_pill(ui, "✦ New Folder", CARD_ELEVATED, TEXT_MUTED);
+                        }
+                    }
+
+                    if ui.button("📂 Folder...").clicked() {
                         if let Some(folder) = rfd::FileDialog::new().pick_folder() {
                             self.dest_path_input = folder.display().to_string();
                         }
                     }
+
+                    if dest_exists && ui.button("↗ Open").on_hover_text("Open folder in OS file manager").clicked() {
+                        open_in_file_manager(Path::new(&dest_trimmed));
+                    }
                 });
 
-                ui.add_space(12.0);
+                ui.add_space(SPACE_MD);
                 ui.separator();
-                ui.add_space(8.0);
+                ui.add_space(SPACE_SM);
 
                 // Extraction Mode & Controls Row
                 ui.horizontal_wrapped(|ui| {
@@ -839,14 +1204,14 @@ mod gui_impl {
                         "Punches 4KB-aligned holes (FALLOC_FL_PUNCH_HOLE) in the source ZIP as each entry is verified, freeing disk space immediately.",
                     );
 
-                    ui.add_space(14.0);
+                    ui.add_space(SPACE_MD);
                     ui.checkbox(
                         &mut self.enable_sparse,
                         RichText::new("Sparse Zero-Block Optimization").color(TEXT_PRIMARY),
                     )
                     .on_hover_text("Skips allocating physical disk blocks for 4KB runs of zeroes.");
 
-                    ui.add_space(14.0);
+                    ui.add_space(SPACE_MD);
                     ui.label(RichText::new("On Collision:").color(TEXT_MUTED));
                     egui::ComboBox::from_id_source("collision_combo")
                         .selected_text(match self.collision_policy {
@@ -855,28 +1220,32 @@ mod gui_impl {
                             CollisionPolicy::Overwrite => "Overwrite",
                             CollisionPolicy::Rename => "Rename",
                         })
-                        .width(95.0)
+                        .width(100.0)
                         .show_ui(ui, |ui| {
                             ui.selectable_value(
                                 &mut self.collision_policy,
                                 CollisionPolicy::Fail,
                                 "Fail",
-                            );
+                            )
+                            .on_hover_text("Fail: Abort extraction immediately if a file already exists at the destination.");
                             ui.selectable_value(
                                 &mut self.collision_policy,
                                 CollisionPolicy::Skip,
                                 "Skip",
-                            );
+                            )
+                            .on_hover_text("Skip: Preserve existing files and skip writing duplicate entries.");
                             ui.selectable_value(
                                 &mut self.collision_policy,
                                 CollisionPolicy::Overwrite,
                                 "Overwrite",
-                            );
+                            )
+                            .on_hover_text("Overwrite: Atomically replace existing destination files.");
                             ui.selectable_value(
                                 &mut self.collision_policy,
                                 CollisionPolicy::Rename,
                                 "Rename",
-                            );
+                            )
+                            .on_hover_text("Rename: Save duplicates with numbered suffixes (e.g. file_1.ext).");
                         });
 
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -884,7 +1253,8 @@ mod gui_impl {
                             && !self.archive_path_input.trim().is_empty()
                             && !self.dest_path_input.trim().is_empty();
                         let extract_btn = egui::Button::new(
-                            RichText::new("  Extract Archive  ")
+                            RichText::new("  Extract Archive [Ctrl+Enter]  ")
+                                .size(FONT_BODY)
                                 .strong()
                                 .color(Color32::WHITE),
                         )
@@ -898,102 +1268,101 @@ mod gui_impl {
                         if ui.add_enabled(can_extract, extract_btn).clicked() {
                             self.start_extraction();
                         }
-
-                        if ui
-                            .button(
-                                RichText::new(if self.show_security_settings {
-                                    "Hide Guardrails ▲"
-                                } else {
-                                    "Guardrails ▼"
-                                })
-                                .size(12.0)
-                                .color(TEXT_MUTED),
-                            )
-                            .clicked()
-                        {
-                            self.show_security_settings = !self.show_security_settings;
-                        }
                     });
                 });
 
                 // Collapsible Security & Resource Guardrails
-                if self.show_security_settings {
-                    ui.add_space(8.0);
-                    Frame::none()
-                        .fill(BG_DARK)
-                        .rounding(Rounding::same(6.0))
-                        .inner_margin(Margin::symmetric(12.0, 10.0))
-                        .stroke(Stroke::new(1.0_f32, BORDER_SUBTLE))
-                        .show(ui, |ui| {
-                            ui.horizontal_wrapped(|ui| {
-                                ui.label(RichText::new("Max Ratio:").size(12.0).color(TEXT_MUTED));
-                                ui.add(
-                                    egui::DragValue::new(&mut self.max_compression_ratio)
-                                        .speed(5.0)
-                                        .clamp_range(1.0..=10000.0)
-                                        .suffix(":1"),
-                                );
+                ui.add_space(SPACE_SM);
+                ui.collapsing(
+                    RichText::new("🔒 Security & Resource Guardrails").size(FONT_LABEL).color(TEXT_MUTED),
+                    |ui| {
+                        Frame::none()
+                            .fill(BG_DARK)
+                            .rounding(Rounding::same(6.0))
+                            .inner_margin(Margin::symmetric(14.0, 10.0))
+                            .stroke(Stroke::new(1.0_f32, BORDER_SUBTLE))
+                            .show(ui, |ui| {
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.label(RichText::new("Max Ratio:").size(FONT_LABEL).color(TEXT_MUTED));
+                                    ui.add(
+                                        egui::DragValue::new(&mut self.max_compression_ratio)
+                                            .speed(5.0)
+                                            .clamp_range(1.0..=10000.0)
+                                            .suffix(":1"),
+                                    ).on_hover_text("Safety threshold to abort extraction on zip bombs.");
 
-                                ui.add_space(12.0);
-                                ui.label(RichText::new("Max Entries:").size(12.0).color(TEXT_MUTED));
-                                ui.add(
-                                    egui::DragValue::new(&mut self.max_entries_limit)
-                                        .speed(100.0)
-                                        .clamp_range(1..=5_000_000),
-                                );
+                                    ui.add_space(SPACE_MD);
+                                    ui.label(RichText::new("Max Entries:").size(FONT_LABEL).color(TEXT_MUTED));
+                                    ui.add(
+                                        egui::DragValue::new(&mut self.max_entries_limit)
+                                            .speed(100.0)
+                                            .clamp_range(1..=5_000_000),
+                                    ).on_hover_text("Maximum total entries permitted.");
 
-                                ui.add_space(12.0);
-                                ui.label(
-                                    RichText::new("Max Total Size (0=unlimited):")
-                                        .size(12.0)
-                                        .color(TEXT_MUTED),
-                                );
-                                ui.add(
-                                    egui::DragValue::new(&mut self.max_total_size_mb)
-                                        .speed(10.0)
-                                        .suffix(" MB"),
-                                );
+                                    ui.add_space(SPACE_MD);
+                                    ui.label(
+                                        RichText::new("Max Total Size (0=∞):")
+                                            .size(FONT_LABEL)
+                                            .color(TEXT_MUTED),
+                                    );
+                                    ui.add(
+                                        egui::DragValue::new(&mut self.max_total_size_mb)
+                                            .speed(10.0)
+                                            .suffix(" MB"),
+                                    ).on_hover_text("Maximum total uncompressed bytes.");
 
-                                ui.add_space(12.0);
-                                ui.label(
-                                    RichText::new("Max Single File (0=unlimited):")
-                                        .size(12.0)
-                                        .color(TEXT_MUTED),
-                                );
-                                ui.add(
-                                    egui::DragValue::new(&mut self.max_file_size_mb)
-                                        .speed(10.0)
-                                        .suffix(" MB"),
-                                );
+                                    ui.add_space(SPACE_MD);
+                                    ui.label(
+                                        RichText::new("Max Single File (0=∞):")
+                                            .size(FONT_LABEL)
+                                            .color(TEXT_MUTED),
+                                    );
+                                    ui.add(
+                                        egui::DragValue::new(&mut self.max_file_size_mb)
+                                            .speed(10.0)
+                                            .suffix(" MB"),
+                                    ).on_hover_text("Maximum size for any single uncompressed entry.");
+                                });
                             });
-                        });
-                }
+                    },
+                );
             });
 
             if let Some(err) = &self.inspection_error {
-                ui.add_space(12.0);
+                ui.add_space(SPACE_MD);
                 Frame::none()
                     .fill(ACCENT_ROSE.gamma_multiply(0.12))
                     .stroke(Stroke::new(1.0_f32, ACCENT_ROSE))
                     .rounding(Rounding::same(6.0))
                     .inner_margin(Margin::symmetric(14.0, 10.0))
                     .show(ui, |ui| {
-                        ui.label(RichText::new(err).color(ACCENT_ROSE));
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(format!("⚠ {}", err)).color(ACCENT_ROSE).strong());
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                if ui.button("📋 Copy Error").clicked() {
+                                    ui.output_mut(|o| o.copied_text = err.clone());
+                                }
+                            });
+                        });
                     });
             }
 
             // 2. Last Extraction Summary Card (if just completed)
             if let Some(summary) = &self.last_summary {
-                ui.add_space(12.0);
-                card_frame().show(ui, |ui| {
+                ui.add_space(SPACE_MD);
+                self.card_frame().show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(
                             RichText::new("LAST EXTRACTION SUMMARY")
-                                .size(11.5)
+                                .size(FONT_LABEL)
                                 .strong()
                                 .color(ACCENT_EMERALD),
                         );
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if ui.small_button("📋 Copy ID").clicked() {
+                                ui.output_mut(|o| o.copied_text = summary.job_id.clone());
+                            }
+                            ui.add_space(SPACE_XS);
                             badge_pill(
                                 ui,
                                 &format!("Job: {}", summary.job_id),
@@ -1002,43 +1371,45 @@ mod gui_impl {
                             );
                         });
                     });
-                    ui.add_space(8.0);
+                    ui.add_space(SPACE_SM);
                     ui.columns(5, |cols| {
-                        metric_tile(
+                        let verified_detail = if summary.skipped_files > 0 {
+                            format!("{} ({} dirs, {} skipped)", summary.extracted_files, summary.created_directories, summary.skipped_files)
+                        } else {
+                            format!("{} ({} dirs)", summary.extracted_files, summary.created_directories)
+                        };
+                        self.metric_tile(
                             &mut cols[0],
                             "Files Verified",
-                            &format!(
-                                "{} ({} dirs)",
-                                summary.extracted_files, summary.created_directories
-                            ),
-                            TEXT_PRIMARY,
+                            &verified_detail,
+                            self.theme().text_primary,
                         );
-                        metric_tile(
+                        self.metric_tile(
                             &mut cols[1],
                             "Data Written",
                             &format_bytes(summary.total_uncompressed_bytes),
-                            TEXT_PRIMARY,
+                            self.theme().text_primary,
                         );
-                        metric_tile(
+                        self.metric_tile(
                             &mut cols[2],
                             "Archive Reclaimed",
                             &format_bytes(summary.reclaimed_archive_bytes),
-                            ACCENT_EMERALD,
+                            if summary.reclaimed_archive_bytes > 0 { ACCENT_EMERALD } else { self.theme().text_muted },
                         );
-                        metric_tile(
+                        self.metric_tile(
                             &mut cols[3],
                             "Peak Disk Footprint",
                             &format_bytes(summary.peak_disk_footprint_bytes),
                             ACCENT_CYAN,
                         );
-                        metric_tile(
+                        self.metric_tile(
                             &mut cols[4],
                             "Throughput",
                             &format!(
                                 "{:.1} MB/s ({:.2?})",
                                 summary.throughput_mb_per_sec, summary.duration
                             ),
-                            TEXT_PRIMARY,
+                            self.theme().text_primary,
                         );
                     });
                 });
@@ -1047,7 +1418,7 @@ mod gui_impl {
             // 3. Archive Inspection & Peak Footprint Simulator
             if let Some(insp) = &self.inspection {
                 ui.add_space(14.0);
-                card_frame().show(ui, |ui| {
+                self.card_frame().show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(
                             RichText::new("ARCHIVE TELEMETRY & FOOTPRINT PROJECTION")
@@ -1096,25 +1467,25 @@ mod gui_impl {
                     let estimated_reclaim_peak = estimated_reclaim_peak.min(classic_peak);
 
                     ui.columns(4, |cols| {
-                        metric_tile(
+                        self.metric_tile(
                             &mut cols[0],
                             "Archive File Size",
                             &format_bytes(insp.file_size),
-                            TEXT_PRIMARY,
+                            self.theme().text_primary,
                         );
-                        metric_tile(
+                        self.metric_tile(
                             &mut cols[1],
                             "Uncompressed Total",
                             &format_bytes(insp.total_uncompressed_size),
-                            TEXT_PRIMARY,
+                            self.theme().text_primary,
                         );
-                        metric_tile(
+                        self.metric_tile(
                             &mut cols[2],
                             "Standard Peak Needed",
                             &format_bytes(classic_peak),
                             ACCENT_AMBER,
                         );
-                        metric_tile(
+                        self.metric_tile(
                             &mut cols[3],
                             "Reclaim Peak Needed",
                             &format_bytes(estimated_reclaim_peak),
@@ -1138,43 +1509,50 @@ mod gui_impl {
                                     saved_pct,
                                     format_bytes(saved_bytes)
                                 ))
-                                .size(12.0)
+                                .size(FONT_LABEL)
                                 .color(ACCENT_EMERALD),
                             );
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                ui.label(
-                                    RichText::new(format!(
-                                        "Identity: {}…",
-                                        &insp.identity[..insp.identity.len().min(16)]
+                                let short_hash = format!("Identity: {}…", &insp.identity[..insp.identity.len().min(14)]);
+                                if ui
+                                    .button(
+                                        RichText::new(short_hash)
+                                            .size(FONT_LABEL)
+                                            .monospace()
+                                            .color(ACCENT_CYAN),
+                                    )
+                                    .on_hover_text(format!(
+                                        "BLAKE3 Identity: {}\nClick to copy full hash to clipboard",
+                                        insp.identity
                                     ))
-                                    .size(11.5)
-                                    .monospace()
-                                    .color(TEXT_DIM),
-                                );
+                                    .clicked()
+                                {
+                                    ui.output_mut(|o| o.copied_text = insp.identity.clone());
+                                }
                             });
                         });
                     }
                 });
 
                 // 4. Entry Explorer Table
-                ui.add_space(14.0);
-                card_frame().show(ui, |ui| {
+                ui.add_space(SPACE_MD);
+                self.card_frame().show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(
                             RichText::new(format!("ARCHIVE ENTRIES ({})", insp.entries.len()))
-                                .size(11.5)
+                                .size(FONT_LABEL)
                                 .strong()
                                 .color(TEXT_MUTED),
                         );
 
-                        ui.add_space(12.0);
+                        ui.add_space(SPACE_MD);
                         ui.add_sized(
-                            [220.0, 24.0],
+                            [200.0, 24.0],
                             TextEdit::singleline(&mut self.entry_search)
                                 .hint_text("Filter entries by name..."),
                         );
 
-                        ui.add_space(8.0);
+                        ui.add_space(SPACE_SM);
                         ui.selectable_value(&mut self.entry_filter, EntryFilter::All, "All");
                         ui.selectable_value(
                             &mut self.entry_filter,
@@ -1187,73 +1565,66 @@ mod gui_impl {
                             EntryFilter::SymlinksOnly,
                             "Symlinks",
                         );
+
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if ui
+                                .button("📄 Export CSV")
+                                .on_hover_text("Export all archive entries to a CSV spreadsheet")
+                                .clicked()
+                            {
+                                if let Some(path) = rfd::FileDialog::new()
+                                    .add_filter("CSV Spreadsheet", &["csv"])
+                                    .set_file_name("entries.csv")
+                                    .save_file()
+                                {
+                                    let mut csv = String::from("index,name,is_dir,is_symlink,method,compressed_bytes,uncompressed_bytes,ratio,crc32,offset\n");
+                                    for e in &insp.entries {
+                                        csv.push_str(&format!(
+                                            "{},\"{}\",{},{},{},{},{},{:.1},0x{:08X},0x{:08X}\n",
+                                            e.index,
+                                            e.name.replace('"', "\"\""),
+                                            e.is_dir,
+                                            e.is_symlink,
+                                            e.compression_method.as_str(),
+                                            e.compressed_size,
+                                            e.uncompressed_size,
+                                            e.savings_ratio(),
+                                            e.crc32,
+                                            e.data_offset,
+                                        ));
+                                    }
+                                    if let Err(err) = fs::write(&path, csv) {
+                                        self.status_banner = Some((format!("Failed to write CSV: {}", err), ACCENT_ROSE));
+                                    } else {
+                                        self.status_banner = Some((format!("Exported {} entries to {:?}", insp.entries.len(), path), ACCENT_EMERALD));
+                                    }
+                                }
+                            }
+                        });
                     });
 
-                    ui.add_space(8.0);
+                    ui.add_space(SPACE_SM);
                     ui.separator();
-                    ui.add_space(4.0);
+                    ui.add_space(SPACE_XS);
 
-                    // Table Header
+                    let avail_width = ui.available_width();
+                    let path_col_width = (avail_width - 530.0).max(200.0);
+
+                    // Table Header with Interactive Sort Buttons
                     ui.horizontal(|ui| {
-                        ui.add_sized(
-                            [45.0, 20.0],
-                            egui::Label::new(
-                                RichText::new("#").size(11.5).strong().color(TEXT_DIM),
-                            ),
-                        );
-                        ui.add_sized(
-                            [280.0, 20.0],
-                            egui::Label::new(
-                                RichText::new("PATH").size(11.5).strong().color(TEXT_DIM),
-                            ),
-                        );
-                        ui.add_sized(
-                            [75.0, 20.0],
-                            egui::Label::new(
-                                RichText::new("METHOD").size(11.5).strong().color(TEXT_DIM),
-                            ),
-                        );
-                        ui.add_sized(
-                            [105.0, 20.0],
-                            egui::Label::new(
-                                RichText::new("COMPRESSED")
-                                    .size(11.5)
-                                    .strong()
-                                    .color(TEXT_DIM),
-                            ),
-                        );
-                        ui.add_sized(
-                            [105.0, 20.0],
-                            egui::Label::new(
-                                RichText::new("UNCOMPRESSED")
-                                    .size(11.5)
-                                    .strong()
-                                    .color(TEXT_DIM),
-                            ),
-                        );
-                        ui.add_sized(
-                            [70.0, 20.0],
-                            egui::Label::new(
-                                RichText::new("RATIO").size(11.5).strong().color(TEXT_DIM),
-                            ),
-                        );
-                        ui.add_sized(
-                            [95.0, 20.0],
-                            egui::Label::new(
-                                RichText::new("CRC-32").size(11.5).strong().color(TEXT_DIM),
-                            ),
-                        );
-                        ui.add_sized(
-                            [95.0, 20.0],
-                            egui::Label::new(
-                                RichText::new("OFFSET").size(11.5).strong().color(TEXT_DIM),
-                            ),
-                        );
+                        sort_header_btn(ui, 45.0, "#", EntrySortKey::Index, &mut self.sort_key, &mut self.sort_ascending);
+                        sort_header_btn(ui, path_col_width, "PATH", EntrySortKey::Path, &mut self.sort_key, &mut self.sort_ascending);
+                        sort_header_btn(ui, 75.0, "METHOD", EntrySortKey::Method, &mut self.sort_key, &mut self.sort_ascending);
+                        sort_header_btn(ui, 100.0, "COMPRESSED", EntrySortKey::Compressed, &mut self.sort_key, &mut self.sort_ascending);
+                        sort_header_btn(ui, 105.0, "UNCOMPRESSED", EntrySortKey::Uncompressed, &mut self.sort_key, &mut self.sort_ascending);
+                        sort_header_btn(ui, 65.0, "RATIO", EntrySortKey::Ratio, &mut self.sort_key, &mut self.sort_ascending);
+                        sort_header_btn(ui, 80.0, "CRC-32", EntrySortKey::Crc32, &mut self.sort_key, &mut self.sort_ascending);
+                        sort_header_btn(ui, 60.0, "OFFSET", EntrySortKey::Offset, &mut self.sort_key, &mut self.sort_ascending);
                     });
                     ui.separator();
 
                     let search_lower = self.entry_search.trim().to_lowercase();
-                    let filtered: Vec<_> = insp
+                    let mut filtered: Vec<_> = insp
                         .entries
                         .iter()
                         .filter(|e| {
@@ -1271,6 +1642,20 @@ mod gui_impl {
                         })
                         .collect();
 
+                    match self.sort_key {
+                        EntrySortKey::Index => filtered.sort_by_key(|e| e.index),
+                        EntrySortKey::Path => filtered.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase())),
+                        EntrySortKey::Method => filtered.sort_by_key(|e| e.compression_method.as_str()),
+                        EntrySortKey::Compressed => filtered.sort_by_key(|e| e.compressed_size),
+                        EntrySortKey::Uncompressed => filtered.sort_by_key(|e| e.uncompressed_size),
+                        EntrySortKey::Ratio => filtered.sort_by(|a, b| a.savings_ratio().partial_cmp(&b.savings_ratio()).unwrap_or(std::cmp::Ordering::Equal)),
+                        EntrySortKey::Crc32 => filtered.sort_by_key(|e| e.crc32),
+                        EntrySortKey::Offset => filtered.sort_by_key(|e| e.data_offset),
+                    }
+                    if !self.sort_ascending {
+                        filtered.reverse();
+                    }
+
                     let row_height = 22.0;
                     ScrollArea::vertical()
                         .id_source("entries_scroll")
@@ -1278,25 +1663,35 @@ mod gui_impl {
                         .show_rows(ui, row_height, filtered.len(), |ui, row_range| {
                             for idx in row_range {
                                 let entry = filtered[idx];
+                                let icon = get_entry_icon(&entry.name, entry.is_dir, entry.is_symlink);
                                 ui.horizontal(|ui| {
+                                    let row_rect = egui::Rect::from_min_size(
+                                        ui.cursor().min,
+                                        Vec2::new(ui.available_width(), row_height),
+                                    );
+                                    if ui.rect_contains_pointer(row_rect) {
+                                        ui.painter().rect_filled(row_rect, Rounding::same(3.0), CARD_ELEVATED);
+                                    }
+
                                     ui.add_sized(
                                         [45.0, row_height],
                                         egui::Label::new(
                                             RichText::new(format!("{}", entry.index))
-                                                .size(12.0)
+                                                .size(FONT_LABEL)
                                                 .monospace()
                                                 .color(TEXT_DIM),
                                         ),
                                     );
-                                    let display_name = if entry.name.len() > 38 {
-                                        format!("…{}", &entry.name[entry.name.len() - 35..])
+                                    let max_chars = ((path_col_width / 7.2) as usize).max(18);
+                                    let display_name = if entry.name.len() > max_chars {
+                                        format!("{} …{}", icon, &entry.name[entry.name.len().saturating_sub(max_chars - 3)..])
                                     } else {
-                                        entry.name.clone()
+                                        format!("{} {}", icon, entry.name)
                                     };
                                     ui.add_sized(
-                                        [280.0, row_height],
+                                        [path_col_width, row_height],
                                         egui::Label::new(
-                                            RichText::new(display_name).size(12.0).color(
+                                            RichText::new(display_name).size(FONT_LABEL).color(
                                                 if entry.is_dir {
                                                     ACCENT_CYAN
                                                 } else {
@@ -1316,15 +1711,15 @@ mod gui_impl {
                                         [75.0, row_height],
                                         egui::Label::new(
                                             RichText::new(entry.compression_method.as_str())
-                                                .size(12.0)
+                                                .size(FONT_LABEL)
                                                 .color(method_color),
                                         ),
                                     );
                                     ui.add_sized(
-                                        [105.0, row_height],
+                                        [100.0, row_height],
                                         egui::Label::new(
                                             RichText::new(short_bytes(entry.compressed_size))
-                                                .size(12.0)
+                                                .size(FONT_LABEL)
                                                 .monospace()
                                                 .color(TEXT_MUTED),
                                         ),
@@ -1333,34 +1728,34 @@ mod gui_impl {
                                         [105.0, row_height],
                                         egui::Label::new(
                                             RichText::new(short_bytes(entry.uncompressed_size))
-                                                .size(12.0)
+                                                .size(FONT_LABEL)
                                                 .monospace()
                                                 .color(TEXT_PRIMARY),
                                         ),
                                     );
                                     ui.add_sized(
-                                        [70.0, row_height],
+                                        [65.0, row_height],
                                         egui::Label::new(
                                             RichText::new(format!("{:.0}%", entry.savings_ratio()))
-                                                .size(12.0)
+                                                .size(FONT_LABEL)
                                                 .monospace()
                                                 .color(TEXT_MUTED),
                                         ),
                                     );
                                     ui.add_sized(
-                                        [95.0, row_height],
+                                        [80.0, row_height],
                                         egui::Label::new(
                                             RichText::new(format!("0x{:08X}", entry.crc32))
-                                                .size(11.5)
+                                                .size(FONT_LABEL)
                                                 .monospace()
                                                 .color(TEXT_DIM),
                                         ),
                                     );
                                     ui.add_sized(
-                                        [95.0, row_height],
+                                        [60.0, row_height],
                                         egui::Label::new(
                                             RichText::new(format!("0x{:08X}", entry.data_offset))
-                                                .size(11.5)
+                                                .size(FONT_LABEL)
                                                 .monospace()
                                                 .color(TEXT_DIM),
                                         ),
@@ -1370,34 +1765,73 @@ mod gui_impl {
                         });
                 });
             } else if self.inspection_error.is_none() {
-                // Empty state placeholder when no archive is loaded yet
-                ui.add_space(28.0);
-                Frame::none()
+                // Drop-Zone Hero when no archive is loaded yet
+                ui.add_space(SPACE_LG);
+                let hero_card = Frame::none()
                     .fill(CARD_BG)
-                    .stroke(Stroke::new(1.0_f32, BORDER_SUBTLE))
-                    .rounding(Rounding::same(10.0))
-                    .inner_margin(Margin::symmetric(32.0, 48.0))
+                    .stroke(Stroke::new(1.5_f32, ACCENT_INDIGO.gamma_multiply(0.45)))
+                    .rounding(Rounding::same(12.0))
+                    .inner_margin(Margin::symmetric(36.0, 44.0))
                     .show(ui, |ui| {
                         ui.vertical_centered(|ui| {
+                            ui.label(RichText::new("🗜").size(48.0));
+                            ui.add_space(SPACE_SM);
                             ui.label(
-                                RichText::new("Drop a ZIP archive here or click Browse")
-                                    .size(16.0)
+                                RichText::new("Drop a ZIP Archive Here")
+                                    .size(19.0)
                                     .strong()
                                     .color(TEXT_PRIMARY),
                             );
-                            ui.add_space(6.0);
+                            ui.add_space(SPACE_XS);
                             ui.label(
                                 RichText::new(
-                                    "Unpackr inspects central directory headers, projects peak disk footprint, and streams verified extraction with optional in-place block reclamation.",
+                                    "or click anywhere in this card to select an archive from your computer",
                                 )
-                                .size(13.0)
+                                .size(FONT_BODY)
                                 .color(TEXT_MUTED),
                             );
-                            ui.add_space(16.0);
+                            ui.add_space(SPACE_MD);
+
+                            ui.horizontal_wrapped(|ui| {
+                                ui.centered_and_justified(|ui| {
+                                    ui.horizontal(|ui| {
+                                        badge_pill(
+                                            ui,
+                                            "⚡ In-Place Block Reclamation",
+                                            CARD_ELEVATED,
+                                            ACCENT_EMERALD,
+                                        );
+                                        ui.add_space(SPACE_XS);
+                                        badge_pill(
+                                            ui,
+                                            "🧩 Sparse Zero-Blocks",
+                                            CARD_ELEVATED,
+                                            ACCENT_CYAN,
+                                        );
+                                        ui.add_space(SPACE_XS);
+                                        badge_pill(
+                                            ui,
+                                            "🛡 Crash Resilient",
+                                            CARD_ELEVATED,
+                                            ACCENT_AMBER,
+                                        );
+                                        ui.add_space(SPACE_XS);
+                                        badge_pill(
+                                            ui,
+                                            "📦 ZIP64 Supported",
+                                            CARD_ELEVATED,
+                                            ACCENT_INDIGO,
+                                        );
+                                    });
+                                });
+                            });
+
+                            ui.add_space(SPACE_LG);
                             if ui
                                 .add(
                                     egui::Button::new(
-                                        RichText::new("  Select Archive (.zip)  ")
+                                        RichText::new("  📂 Select Archive (.zip)  ")
+                                            .size(FONT_BODY)
                                             .strong()
                                             .color(Color32::WHITE),
                                     )
@@ -1415,17 +1849,26 @@ mod gui_impl {
                             }
                         });
                     });
+
+                if hero_card.response.interact(egui::Sense::click()).clicked() {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("ZIP Archives", &["zip", "ZIP"])
+                        .pick_file()
+                    {
+                        self.load_archive(path);
+                    }
+                }
             }
         }
 
         fn render_jobs_tab(&mut self, ui: &mut egui::Ui) {
-            card_frame().show(ui, |ui| {
+            self.card_frame().show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new("CRASH RECOVERY & STATEFUL JOBS")
                             .size(11.5)
                             .strong()
-                            .color(TEXT_MUTED),
+                            .color(self.theme().text_muted),
                     );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if ui.button("Refresh Jobs").clicked() {
@@ -1475,23 +1918,26 @@ mod gui_impl {
             ui.add_space(14.0);
 
             if self.jobs.is_empty() {
-                card_frame().show(ui, |ui| {
+                self.card_frame().show(ui, |ui| {
                     ui.vertical_centered(|ui| {
-                        ui.add_space(20.0);
+                        ui.add_space(SPACE_LG);
+                        ui.label(RichText::new("🗂").size(40.0));
+                        ui.add_space(SPACE_XS);
                         ui.label(
-                            RichText::new("No extraction job manifests found")
-                                .size(15.0)
+                            RichText::new("No active or past extraction jobs found")
+                                .size(FONT_TITLE)
                                 .strong()
-                                .color(TEXT_PRIMARY),
+                                .color(self.theme().text_primary),
                         );
-                        ui.add_space(4.0);
+                        ui.add_space(SPACE_XS);
                         ui.label(
                             RichText::new(
-                                "Jobs are automatically journaled to ~/.unpackr/jobs/ and <destination>/.unpackr/manifest.json.",
+                                "Jobs are automatically journaled to ~/.unpackr/jobs/ and <destination>/.unpackr/manifest.json for atomic crash recovery.",
                             )
-                            .color(TEXT_MUTED),
+                            .size(FONT_BODY)
+                            .color(self.theme().text_muted),
                         );
-                        ui.add_space(20.0);
+                        ui.add_space(SPACE_LG);
                     });
                 });
                 return;
@@ -1511,16 +1957,35 @@ mod gui_impl {
                 let failed = m.failed_count();
                 let pending = m.pending_count();
                 let pct = m.progress_percent() as f32 / 100.0;
+                let archive_title = m.archive.path.file_name().and_then(|n| n.to_str()).unwrap_or(&m.job_id);
 
-                card_frame().show(ui, |ui| {
+                self.card_frame().show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(
-                            RichText::new(&m.job_id)
-                                .size(14.5)
+                            RichText::new(format!("📦 {}", archive_title))
+                                .size(FONT_TITLE)
                                 .strong()
                                 .color(TEXT_PRIMARY),
                         );
-                        ui.add_space(8.0);
+                        ui.add_space(SPACE_XS);
+                        let short_id = if m.job_id.len() > 8 { &m.job_id[..8] } else { &m.job_id };
+                        if ui
+                            .small_button(RichText::new(format!("#{}", short_id)).monospace().color(TEXT_MUTED))
+                            .on_hover_text(format!("Job ID: {}\nClick to copy full ID", m.job_id))
+                            .clicked()
+                        {
+                            ui.output_mut(|o| o.copied_text = m.job_id.clone());
+                        }
+
+                        ui.add_space(SPACE_XS);
+                        badge_pill(
+                            ui,
+                            &humanize_time_ago(m.updated_at_unix),
+                            CARD_ELEVATED,
+                            TEXT_DIM,
+                        );
+
+                        ui.add_space(SPACE_XS);
                         if failed > 0 {
                             badge_pill(
                                 ui,
@@ -1662,7 +2127,7 @@ mod gui_impl {
             if let Some((job_id, failures)) = &self.last_verification {
                 if !failures.is_empty() {
                     ui.add_space(6.0);
-                    card_frame().show(ui, |ui| {
+                    self.card_frame().show(ui, |ui| {
                         ui.label(
                             RichText::new(format!(
                                 "VERIFICATION FAILURES FOR '{}' ({})",
@@ -1678,7 +2143,7 @@ mod gui_impl {
                             ui.label(
                                 RichText::new(format!("• {} — {}", f.entry_name, f.reason))
                                     .size(12.0)
-                                    .color(TEXT_PRIMARY),
+                                    .color(self.theme().text_primary),
                             );
                         }
                     });
@@ -1687,12 +2152,12 @@ mod gui_impl {
         }
 
         fn render_benchmark_tab(&mut self, ui: &mut egui::Ui) {
-            card_frame().show(ui, |ui| {
+            self.card_frame().show(ui, |ui| {
                 ui.label(
                     RichText::new("PEAK DISK FOOTPRINT BENCHMARK")
                         .size(11.5)
                         .strong()
-                        .color(TEXT_MUTED),
+                        .color(self.theme().text_muted),
                 );
                 ui.add_space(6.0);
                 ui.label(
@@ -1756,13 +2221,13 @@ mod gui_impl {
 
             if let Some(report) = &self.last_bench_report {
                 ui.add_space(14.0);
-                card_frame().show(ui, |ui| {
+                self.card_frame().show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(
                             RichText::new(&report.workload)
                                 .size(14.0)
                                 .strong()
-                                .color(TEXT_PRIMARY),
+                                .color(self.theme().text_primary),
                         );
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             if report.integrity_verified {
@@ -1786,19 +2251,19 @@ mod gui_impl {
                     ui.add_space(14.0);
 
                     ui.columns(4, |cols| {
-                        metric_tile(
+                        self.metric_tile(
                             &mut cols[0],
                             "Standard Peak Footprint",
                             &format_bytes(report.standard_peak_bytes),
                             ACCENT_AMBER,
                         );
-                        metric_tile(
+                        self.metric_tile(
                             &mut cols[1],
                             "Reclaim Peak Footprint",
                             &format_bytes(report.reclaim_peak_bytes),
                             ACCENT_EMERALD,
                         );
-                        metric_tile(
+                        self.metric_tile(
                             &mut cols[2],
                             "Peak Disk Space Saved",
                             &format!(
@@ -1808,7 +2273,7 @@ mod gui_impl {
                             ),
                             ACCENT_CYAN,
                         );
-                        metric_tile(
+                        self.metric_tile(
                             &mut cols[3],
                             "Archive Bytes Reclaimed",
                             &format_bytes(report.archive_bytes_reclaimed),
@@ -1816,9 +2281,33 @@ mod gui_impl {
                         );
                     });
 
-                    ui.add_space(16.0);
+                    ui.add_space(SPACE_MD);
                     ui.separator();
-                    ui.add_space(12.0);
+                    ui.add_space(SPACE_SM);
+
+                    // High-impact savings highlight card
+                    Frame::none()
+                        .fill(ACCENT_EMERALD.gamma_multiply(0.12))
+                        .stroke(Stroke::new(1.0_f32, ACCENT_EMERALD.gamma_multiply(0.45)))
+                        .rounding(Rounding::same(8.0))
+                        .inner_margin(Margin::symmetric(16.0, 10.0))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new("⚡ DISK FOOTPRINT REDUCTION:").size(FONT_BODY).strong().color(ACCENT_EMERALD));
+                                ui.label(
+                                    RichText::new(format!(
+                                        "-{:.1}% Peak Disk Storage Needed  (Saved {})",
+                                        report.peak_space_saved_percent,
+                                        format_bytes(report.peak_space_saved_bytes)
+                                    ))
+                                    .size(FONT_TITLE)
+                                    .strong()
+                                    .color(self.theme().text_primary),
+                                );
+                            });
+                        });
+
+                    ui.add_space(SPACE_MD);
 
                     // Visual Bar Comparison
                     let max_bytes = report
@@ -1837,8 +2326,8 @@ mod gui_impl {
                             report.standard_throughput_mb_s,
                             report.standard_duration_secs
                         ))
-                        .size(12.5)
-                        .color(TEXT_MUTED),
+                        .size(FONT_BODY)
+                        .color(self.theme().text_muted),
                     );
                     ui.add(
                         egui::ProgressBar::new(std_frac)
@@ -1846,7 +2335,7 @@ mod gui_impl {
                             .fill(ACCENT_AMBER.gamma_multiply(0.75)),
                     );
 
-                    ui.add_space(10.0);
+                    ui.add_space(SPACE_SM);
 
                     ui.label(
                         RichText::new(format!(
@@ -1855,7 +2344,7 @@ mod gui_impl {
                             report.reclaim_throughput_mb_s,
                             report.reclaim_duration_secs
                         ))
-                        .size(12.5)
+                        .size(FONT_BODY)
                         .color(ACCENT_EMERALD)
                         .strong(),
                     );
@@ -1866,29 +2355,99 @@ mod gui_impl {
                     );
                 });
             }
+
+            if !self.bench_history.is_empty() {
+                ui.add_space(SPACE_MD);
+                self.card_frame().show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new("BENCHMARK RUN HISTORY")
+                                .size(FONT_LABEL)
+                                .strong()
+                                .color(self.theme().text_muted),
+                        );
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if ui.button("Clear History").clicked() {
+                                self.bench_history.clear();
+                            }
+                            ui.label(
+                                RichText::new(format!("{} runs recorded", self.bench_history.len()))
+                                    .size(FONT_LABEL)
+                                    .color(self.theme().text_dim),
+                            );
+                        });
+                    });
+
+                    ui.add_space(SPACE_SM);
+                    ui.separator();
+                    ui.add_space(SPACE_XS);
+
+                    // Table headers
+                    ui.horizontal(|ui| {
+                        ui.add_sized([40.0, 18.0], egui::Label::new(RichText::new("RUN").size(FONT_LABEL).strong().color(self.theme().text_dim)));
+                        ui.add_sized([65.0, 18.0], egui::Label::new(RichText::new("ENTRIES").size(FONT_LABEL).strong().color(self.theme().text_dim)));
+                        ui.add_sized([80.0, 18.0], egui::Label::new(RichText::new("TOTAL SIZE").size(FONT_LABEL).strong().color(self.theme().text_dim)));
+                        ui.add_sized([110.0, 18.0], egui::Label::new(RichText::new("STD PEAK").size(FONT_LABEL).strong().color(self.theme().text_dim)));
+                        ui.add_sized([110.0, 18.0], egui::Label::new(RichText::new("RECLAIM PEAK").size(FONT_LABEL).strong().color(self.theme().text_dim)));
+                        ui.add_sized([100.0, 18.0], egui::Label::new(RichText::new("SPACE SAVED").size(FONT_LABEL).strong().color(self.theme().text_dim)));
+                        ui.add_sized([110.0, 18.0], egui::Label::new(RichText::new("RECLAIM SPEED").size(FONT_LABEL).strong().color(self.theme().text_dim)));
+                    });
+                    ui.separator();
+
+                    for (idx, h) in self.bench_history.iter().enumerate().rev() {
+                        ui.horizontal(|ui| {
+                            ui.add_sized([40.0, 20.0], egui::Label::new(RichText::new(format!("#{}", idx + 1)).size(FONT_LABEL).monospace().color(self.theme().text_muted)));
+                            ui.add_sized([65.0, 20.0], egui::Label::new(RichText::new(format!("{}", h.total_entries)).size(FONT_LABEL).color(self.theme().text_primary)));
+                            ui.add_sized([80.0, 20.0], egui::Label::new(RichText::new(format_bytes(h.uncompressed_bytes)).size(FONT_LABEL).monospace().color(self.theme().text_muted)));
+                            ui.add_sized([110.0, 20.0], egui::Label::new(RichText::new(format_bytes(h.standard_peak_bytes)).size(FONT_LABEL).monospace().color(ACCENT_AMBER)));
+                            ui.add_sized([110.0, 20.0], egui::Label::new(RichText::new(format_bytes(h.reclaim_peak_bytes)).size(FONT_LABEL).monospace().color(ACCENT_EMERALD)));
+                            ui.add_sized([100.0, 20.0], egui::Label::new(RichText::new(format!("-{:.1}%", h.peak_space_saved_percent)).size(FONT_LABEL).strong().color(ACCENT_CYAN)));
+                            ui.add_sized([110.0, 20.0], egui::Label::new(RichText::new(format!("{:.1} MB/s", h.reclaim_throughput_mb_s)).size(FONT_LABEL).color(self.theme().text_muted)));
+                        });
+                    }
+                });
+            }
         }
     }
 
-    fn configure_minimalist_theme(ctx: &egui::Context) {
-        let mut visuals = egui::Visuals::dark();
-        visuals.panel_fill = BG_DARK;
-        visuals.window_fill = CARD_BG;
-        visuals.extreme_bg_color = Color32::from_rgb(10, 12, 15);
-        visuals.faint_bg_color = CARD_ELEVATED;
+    fn configure_minimalist_theme(ctx: &egui::Context, is_dark: bool) {
+        let palette = if is_dark {
+            ThemePalette::dark()
+        } else {
+            ThemePalette::light()
+        };
 
-        visuals.widgets.noninteractive.bg_fill = CARD_BG;
-        visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, BORDER_SUBTLE);
-        visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, TEXT_PRIMARY);
+        let mut visuals = if is_dark {
+            egui::Visuals::dark()
+        } else {
+            egui::Visuals::light()
+        };
+        visuals.panel_fill = palette.bg_dark;
+        visuals.window_fill = palette.card_bg;
+        visuals.extreme_bg_color = if is_dark {
+            Color32::from_rgb(10, 12, 15)
+        } else {
+            Color32::from_rgb(255, 255, 255)
+        };
+        visuals.faint_bg_color = palette.card_elevated;
+
+        visuals.widgets.noninteractive.bg_fill = palette.card_bg;
+        visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, palette.border_subtle);
+        visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, palette.text_primary);
         visuals.widgets.noninteractive.rounding = Rounding::same(6.0);
 
-        visuals.widgets.inactive.bg_fill = CARD_ELEVATED;
-        visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, BORDER_SUBTLE);
-        visuals.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, TEXT_PRIMARY);
+        visuals.widgets.inactive.bg_fill = palette.card_elevated;
+        visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, palette.border_subtle);
+        visuals.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, palette.text_primary);
         visuals.widgets.inactive.rounding = Rounding::same(6.0);
 
-        visuals.widgets.hovered.bg_fill = Color32::from_rgb(38, 44, 56);
+        visuals.widgets.hovered.bg_fill = if is_dark {
+            Color32::from_rgb(38, 44, 56)
+        } else {
+            Color32::from_rgb(230, 235, 245)
+        };
         visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, ACCENT_INDIGO);
-        visuals.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, Color32::WHITE);
+        visuals.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, if is_dark { Color32::WHITE } else { palette.text_primary });
         visuals.widgets.hovered.rounding = Rounding::same(6.0);
 
         visuals.widgets.active.bg_fill = ACCENT_INDIGO;
@@ -1907,29 +2466,49 @@ mod gui_impl {
         ctx.set_style(style);
     }
 
-    fn card_frame() -> Frame {
-        Frame::none()
-            .fill(CARD_BG)
-            .stroke(Stroke::new(1.0_f32, BORDER_SUBTLE))
-            .rounding(Rounding::same(8.0))
-            .inner_margin(Margin::symmetric(18.0, 14.0))
+    fn open_in_file_manager(path: &Path) {
+        #[cfg(target_os = "linux")]
+        {
+            let _ = std::process::Command::new("xdg-open").arg(path).spawn();
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let _ = std::process::Command::new("open").arg(path).spawn();
+        }
+        #[cfg(target_os = "windows")]
+        {
+            let _ = std::process::Command::new("explorer").arg(path).spawn();
+        }
     }
 
-    fn nav_tab_button(ui: &mut egui::Ui, label: &str, active: bool, on_click: impl FnOnce()) {
-        let btn = egui::Button::new(RichText::new(label).size(13.0).strong().color(if active {
-            Color32::WHITE
-        } else {
-            TEXT_MUTED
-        }))
+    fn nav_tab_button(
+        ui: &mut egui::Ui,
+        palette: &ThemePalette,
+        icon: &str,
+        label: &str,
+        active: bool,
+        on_click: impl FnOnce(),
+    ) {
+        let display = format!("{}  {}", icon, label);
+        let btn = egui::Button::new(
+            RichText::new(display)
+                .size(FONT_BODY)
+                .strong()
+                .color(if active {
+                    Color32::WHITE
+                } else {
+                    palette.text_muted
+                }),
+        )
         .fill(if active {
             ACCENT_INDIGO
         } else {
             Color32::TRANSPARENT
         })
         .stroke(if active {
-            Stroke::NONE
+            Stroke::new(1.0_f32, ACCENT_INDIGO)
         } else {
-            Stroke::new(1.0_f32, BORDER_SUBTLE)
+            Stroke::new(1.0_f32, palette.border_subtle)
         })
         .rounding(Rounding::same(6.0));
 
@@ -1948,19 +2527,93 @@ mod gui_impl {
             });
     }
 
-    fn metric_tile(ui: &mut egui::Ui, label: &str, value: &str, value_color: Color32) {
-        Frame::none()
-            .fill(CARD_ELEVATED)
-            .rounding(Rounding::same(6.0))
-            .inner_margin(Margin::symmetric(12.0, 10.0))
-            .stroke(Stroke::new(1.0_f32, BORDER_SUBTLE))
-            .show(ui, |ui| {
-                ui.vertical(|ui| {
-                    ui.label(RichText::new(label).size(11.0).color(TEXT_MUTED));
-                    ui.add_space(3.0);
-                    ui.label(RichText::new(value).size(14.5).strong().color(value_color));
-                });
-            });
+    fn humanize_time_ago(unix_timestamp: u64) -> String {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(unix_timestamp);
+        let diff = now.saturating_sub(unix_timestamp);
+        if diff < 60 {
+            format!("{}s ago", diff.max(1))
+        } else if diff < 3600 {
+            format!("{}m ago", diff / 60)
+        } else if diff < 86400 {
+            format!("{}h ago", diff / 3600)
+        } else {
+            format!("{}d ago", diff / 86400)
+        }
+    }
+
+    fn get_entry_icon(name: &str, is_dir: bool, is_symlink: bool) -> &'static str {
+        if is_dir {
+            "📁"
+        } else if is_symlink {
+            "🔗"
+        } else {
+            let lower = name.to_lowercase();
+            if lower.ends_with(".png")
+                || lower.ends_with(".jpg")
+                || lower.ends_with(".jpeg")
+                || lower.ends_with(".gif")
+                || lower.ends_with(".svg")
+                || lower.ends_with(".webp")
+                || lower.ends_with(".ico")
+                || lower.ends_with(".bmp")
+            {
+                "🖼"
+            } else if lower.ends_with(".zip")
+                || lower.ends_with(".tar")
+                || lower.ends_with(".gz")
+                || lower.ends_with(".xz")
+                || lower.ends_with(".7z")
+                || lower.ends_with(".rar")
+                || lower.ends_with(".bz2")
+            {
+                "📦"
+            } else if lower.ends_with(".exe")
+                || lower.ends_with(".bin")
+                || lower.ends_with(".so")
+                || lower.ends_with(".dll")
+                || lower.ends_with(".dylib")
+                || lower.ends_with(".elf")
+            {
+                "⚙"
+            } else {
+                "📄"
+            }
+        }
+    }
+
+    fn sort_header_btn(
+        ui: &mut egui::Ui,
+        width: f32,
+        title: &str,
+        key: EntrySortKey,
+        current_key: &mut EntrySortKey,
+        ascending: &mut bool,
+    ) {
+        let is_current = *current_key == key;
+        let arrow = if is_current {
+            if *ascending { " ▲" } else { " ▼" }
+        } else {
+            ""
+        };
+        let label_text = format!("{}{}", title, arrow);
+        let color = if is_current { ACCENT_CYAN } else { TEXT_DIM };
+        let resp = ui.add_sized(
+            [width, 20.0],
+            egui::Button::new(RichText::new(label_text).size(FONT_LABEL).strong().color(color))
+                .fill(Color32::TRANSPARENT)
+                .stroke(Stroke::NONE),
+        );
+        if resp.clicked() {
+            if is_current {
+                *ascending = !*ascending;
+            } else {
+                *current_key = key;
+                *ascending = true;
+            }
+        }
     }
 
     fn short_bytes(bytes: u64) -> String {

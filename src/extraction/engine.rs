@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::archive::{EntryState, ZipInspector};
@@ -178,6 +180,7 @@ struct ProcessEntriesParams<'a> {
     initial_archive_phys: u64,
     already_extracted_bytes: u64,
     already_reclaimed_bytes: u64,
+    cancel_token: Option<Arc<AtomicBool>>,
 }
 
 fn process_entries<F: FnMut(ExtractionProgress)>(
@@ -200,6 +203,13 @@ fn process_entries<F: FnMut(ExtractionProgress)>(
     let mut warned_reclamation_unsupported = false;
 
     for (i, entry) in params.entries.iter().enumerate() {
+        if let Some(ref cancel) = params.cancel_token {
+            if cancel.load(Ordering::Relaxed) {
+                let _ = tracker.flush();
+                return Err(ExtractionError::Archive("Extraction cancelled by user".to_string()));
+            }
+        }
+
         if params.collision_policy != CollisionPolicy::Overwrite
             && params.collision_policy != CollisionPolicy::Rename
         {
@@ -466,6 +476,16 @@ impl ExtractionEngine {
         options: &ExtractionOptions,
         on_progress: F,
     ) -> Result<ExtractionSummary, ExtractionError> {
+        Self::extract_with_progress_and_cancel(archive_path, options, on_progress, None)
+    }
+
+    /// Extracts an archive with a real-time per-entry progress callback and an optional cancellation token.
+    pub fn extract_with_progress_and_cancel<F: FnMut(ExtractionProgress)>(
+        archive_path: &Path,
+        options: &ExtractionOptions,
+        on_progress: F,
+        cancel_token: Option<Arc<AtomicBool>>,
+    ) -> Result<ExtractionSummary, ExtractionError> {
         let start_time = Instant::now();
 
         // 1. Inspect archive headers and resolve data offsets
@@ -610,6 +630,7 @@ impl ExtractionEngine {
             initial_archive_phys,
             already_extracted_bytes: 0,
             already_reclaimed_bytes: 0,
+            cancel_token,
         };
 
         process_entries(archive_file, puncher, &mut tracker, params, on_progress)
@@ -628,6 +649,16 @@ impl ExtractionEngine {
         job_id_or_path: &str,
         options: &ResumeOptions,
         on_progress: F,
+    ) -> Result<ExtractionSummary, ExtractionError> {
+        Self::resume_with_progress_and_cancel(job_id_or_path, options, on_progress, None)
+    }
+
+    /// Resumes an interrupted extraction job with a real-time per-entry progress callback and an optional cancellation token.
+    pub fn resume_with_progress_and_cancel<F: FnMut(ExtractionProgress)>(
+        job_id_or_path: &str,
+        options: &ResumeOptions,
+        on_progress: F,
+        cancel_token: Option<Arc<AtomicBool>>,
     ) -> Result<ExtractionSummary, ExtractionError> {
         let start_time = Instant::now();
 
@@ -804,6 +835,7 @@ impl ExtractionEngine {
             initial_archive_phys,
             already_extracted_bytes,
             already_reclaimed_bytes,
+            cancel_token,
         };
 
         process_entries(archive_file, puncher, &mut tracker, params, on_progress)
